@@ -1,0 +1,2409 @@
+<!-- ============================================================ -->
+<!--  PWA setup: manifest + icons + service worker registration   -->
+<!-- ============================================================ -->
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#12161b" />
+<link rel="icon" href="./icon-192.png" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>BusChief</title>
+
+<!-- ============================================================ -->
+<!--  Firebase (live shared data) - REQUIRED CONFIG BELOW          -->
+<!--  Paste your own Firebase project config into FIREBASE_CONFIG  -->
+<!--  See the setup guide, Part 1, for exactly where to get this.  -->
+<!-- ============================================================ -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyBcm_ppVHDsoXDQv0USPKr_xesytKAuREc",
+    authDomain: "buschief-tracker.firebaseapp.com",
+    databaseURL: "https://buschief-tracker-default-rtdb.firebaseio.com",
+    projectId: "buschief-tracker",
+    storageBucket: "buschief-tracker.firebasestorage.app",
+    messagingSenderId: "541581385198",
+    appId: "1:541581385198:web:ee651d5eff3b600ee0c2ff"
+  };
+  firebase.initializeApp(FIREBASE_CONFIG);
+  const fbDb = firebase.database();
+</script>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<div id="app-root"></div>
+<style>
+  :root {
+    --bg: #12161b;
+    --panel: #1a2129;
+    --panel-alt: #212a33;
+    --border: #2b3540;
+    --text: #eef1f4;
+    --text-dim: #8b96a3;
+    --brand: #2E6FCB;
+    --brand-hover: #4A8FE0;
+    --brand-dim: #14345c;
+    --accent: #E8963A;
+    --accent-dim: #4a3420;
+    --status-amber: #f2a93b;
+    --status-amber-dim: #4a3a1c;
+    --green: #34d399;
+    --green-dim: #16332a;
+    --blue: #4c8dff;
+    --blue-dim: #182a4a;
+    --red: #e2665a;
+    --red-dim: #3a2220;
+    --mono: 'Space Mono', 'SFMono-Regular', Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  #app-root * { box-sizing: border-box; }
+  #app-root { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .screen { max-width: 640px; margin: 0 auto; padding: 20px 18px 60px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .brand-text { font-family: var(--mono); letter-spacing: 0.06em; font-size: 13px; color: var(--text-dim); text-transform: uppercase; }
+  .brand-text b { color: var(--text); }
+  .back-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); font-family: var(--sans); font-size: 13px; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+  .back-btn:hover { color: var(--text); border-color: var(--text-dim); }
+  .link-btn { background: none; border: none; color: var(--brand); font-size: 12.5px; cursor: pointer; font-family: var(--sans); text-decoration: underline; padding: 0; }
+  h1 { font-family: var(--mono); font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 4px 0 4px; }
+  h2 { font-family: var(--mono); font-size: 16px; font-weight: 700; margin: 0 0 12px; color: var(--text); }
+  h3 { font-family: var(--mono); font-size: 13px; font-weight: 700; margin: 22px 0 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+  .subtitle { color: var(--text-dim); font-size: 14px; margin: 0 0 24px; line-height: 1.5; }
+  .role-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 28px; }
+  @media (min-width: 520px) { .role-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); } }
+  .role-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 26px 20px; text-align: left; cursor: pointer; transition: border-color .15s, transform .1s; font-family: var(--sans); color: var(--text); }
+  .role-card:hover { border-color: var(--brand); transform: translateY(-1px); }
+  .role-card .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--brand); text-transform: uppercase; margin-bottom: 10px; }
+  .role-card .title { font-size: 19px; font-weight: 700; margin-bottom: 6px; }
+  .role-card .desc { font-size: 13.5px; color: var(--text-dim); line-height: 1.5; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 16px; margin-bottom: 12px; }
+  .card:hover { border-color: #3a4552; }
+  .list-btn { width: 100%; text-align: left; background: none; border: none; color: inherit; cursor: pointer; font-family: inherit; padding: 0; }
+  .run-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .run-id { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--brand); }
+  .run-desc { font-size: 13.5px; color: var(--text-dim); margin-top: 2px; }
+  .chev { color: var(--text-dim); font-size: 18px; }
+  .status-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700; padding: 4px 9px; border-radius: 20px; white-space: nowrap; }
+  .status-pill .sdot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-Not-Started { background: var(--red-dim); color: var(--red); } .status-Not-Started .sdot { background: var(--red); }
+  .status-At-Staging { background: var(--status-amber-dim); color: var(--status-amber); } .status-At-Staging .sdot { background: var(--status-amber); }
+  .status-In-Route { background: var(--blue-dim); color: var(--blue); } .status-In-Route .sdot { background: var(--blue); }
+  .status-Completed { background: var(--green-dim); color: var(--green); } .status-Completed .sdot { background: var(--green); }
+  label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin: 16px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+  input[type=text], input[type=number], input[type=password], input[type=time], textarea, select {
+    width: 100%; background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--sans); font-size: 15px; padding: 11px 12px; border-radius: 9px; outline: none;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--brand); }
+  textarea { resize: vertical; min-height: 90px; font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+  .checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .checkbox-row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--brand); }
+  .checkbox-row .cr-label { font-family: var(--sans); font-size: 14.5px; color: var(--text); text-transform: none; letter-spacing: 0; }
+  .pin-input { width: 100%; background: var(--panel-alt); border: 1.5px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 28px; letter-spacing: 0.3em; text-align: center; padding: 16px 12px; border-radius: 12px; outline: none; }
+  .pin-input:focus { border-color: var(--brand); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--sans); font-weight: 600; font-size: 14.5px; padding: 12px 18px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; width: 100%; transition: filter .1s, transform .05s; }
+  .btn:active { transform: scale(0.985); }
+  .btn-primary { background: var(--brand); color: #FFFFFF; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-secondary { background: var(--panel-alt); color: var(--text); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--text-dim); }
+  .btn-ghost { background: none; color: var(--text-dim); border-color: var(--border); }
+  .btn-danger { background: var(--red-dim); color: var(--red); border-color: var(--red); }
+  .btn-row { display: flex; gap: 10px; margin-top: 18px; }
+  .btn-row .btn { width: auto; flex: 1; }
+  .bus-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-top: 6px; }
+  .bus-tile { background: var(--panel-alt); border: 1.5px solid var(--border); border-radius: 12px; padding: 14px 10px; text-align: center; cursor: pointer; font-family: var(--sans); }
+  .bus-tile:hover { border-color: var(--brand); }
+  .bus-tile .bnum { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+  .bus-tile .blabel { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+  .bus-tile .bguide { font-size: 12px; color: var(--text-dim); margin-top: 6px; min-height: 15px; }
+  .stat-strip { display: flex; gap: 10px; margin: 14px 0 18px; }
+  .stat-box { flex: 1; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+  .stat-box .num { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+  .stat-box .lbl { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+  .status-stepper { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .status-stepper .cur-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; font-family: var(--mono); margin-bottom: 8px; }
+  .eta-banner { background: var(--brand-dim); border: 1.5px solid var(--brand); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .eta-banner .eta-title { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--brand); margin-bottom: 8px; font-weight: 700; }
+  .eta-banner .eta-row { display: flex; gap: 8px; align-items: center; }
+  .eta-banner input[type=time] { flex: 1; }
+  .eta-current { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; }
+  .gps-status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); margin-bottom: 14px; font-family: var(--mono); }
+  .gps-status .gdot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
+  .gps-status.live .gdot { background: var(--green); box-shadow: 0 0 0 3px var(--green-dim); }
+  .search-wrap { position: sticky; top: 61px; background: var(--bg); padding: 10px 0; z-index: 9; }
+  .pax-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .pax-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; user-select: none; }
+  .pax-row.boarded-mine { background: var(--green-dim); border-color: var(--green); }
+  .pax-row.boarded-other { opacity: 0.55; cursor: default; }
+  .checkbox { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--text-dim); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .boarded-mine .checkbox { background: var(--green); border-color: var(--green); color: #08201a; }
+  .boarded-other .checkbox { background: var(--text-dim); border-color: var(--text-dim); color: var(--panel); }
+  .pax-name { flex: 1; font-size: 15px; }
+  .boarded-other .pax-name { text-decoration: line-through; text-decoration-color: var(--text-dim); }
+  .pax-tag { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); }
+  .empty-state { text-align: center; padding: 50px 20px; color: var(--text-dim); }
+  .empty-state .big { font-size: 32px; margin-bottom: 10px; }
+  .banner { background: var(--panel-alt); border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+  .csv-box, .code-box { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); overflow-x: auto; white-space: pre; margin-top: 10px; }
+  .code-box { max-height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel-alt); border: 1px solid var(--green); color: var(--text); padding: 10px 18px; border-radius: 30px; font-size: 13px; font-family: var(--sans); z-index: 100; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+  .bus-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); gap: 10px; }
+  .bus-detail-row:last-child { border-bottom: none; }
+  .bus-detail-left { display: flex; align-items: center; gap: 10px; }
+  .bus-detail-num { font-family: var(--mono); font-weight: 700; font-size: 15px; width: 24px; }
+  .bus-detail-meta { font-size: 12px; color: var(--text-dim); }
+  .bus-detail-count { font-family: var(--mono); font-size: 13px; text-align: right; }
+  .roster-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .roster-row:last-child { border-bottom: none; }
+  .roster-name { font-size: 14.5px; }
+  .roster-pin { font-family: var(--mono); font-size: 16px; letter-spacing: 0.1em; color: var(--accent); background: var(--panel-alt); padding: 4px 10px; border-radius: 6px; }
+  .roster-del { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; padding: 4px 8px; }
+  .roster-del:hover { color: var(--red); }
+  #live-map { height: 260px; border-radius: 12px; overflow: hidden; margin: 14px 0; border: 1px solid var(--border); }
+  .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); font-family: var(--sans); }
+  .leaflet-popup-tip { background: var(--panel); }
+  .step-track { font-family: var(--mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+  .step-track b { color: var(--brand); }
+  .prompt-card { background: var(--panel); border: 1.5px solid var(--brand); border-radius: 16px; padding: 28px 22px; text-align: center; margin-top: 12px; }
+  .prompt-card .picon { font-size: 34px; margin-bottom: 12px; }
+  .prompt-card .ptitle { font-family: var(--mono); font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+  .prompt-card .pdesc { font-size: 13.5px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.5; }
+  .overview-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .overview-row:last-child { border-bottom: none; }
+  .tab-bar { display: flex; gap: 4px; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 12px; padding: 4px; margin: 4px 0 20px; overflow-x: auto; }
+  .tab-btn { flex: 1; white-space: nowrap; background: none; border: none; color: var(--text-dim); font-family: var(--sans); font-size: 13px; font-weight: 600; padding: 10px 8px; border-radius: 9px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .tab-btn.active { background: var(--panel); color: var(--brand); }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+  .overview-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px; }
+  .overview-value { font-size: 15px; line-height: 1.5; }
+  .route-arrow { color: var(--brand); font-family: var(--mono); }
+  ::placeholder { color: #5c6773; }
+</style>
+
+<script>
+(function () {
+  const STATUS_ORDER = ["Not Started", "At Staging", "In Route", "Completed"];
+  const BUS_COMPANIES = ["Academy Express", "Raritan Valley", "American Dream Coaches"];
+  function getChecklistItems(run) {
+    const items = [
+      { key: "guideArrived", question: "Has the guide arrived at the staging location?", short: "Guide arrived at staging" },
+    ];
+    if (run.catering) items.push({ key: "cateringLoaded", question: "Has catering arrived and been loaded onto the bus?", short: "Catering arrived & loaded" });
+    items.push({ key: "teamInPlace", question: "Are all team members in place?", short: "All team members in place" });
+    return items;
+  }
+  const STATUS_CLASS = s => "status-" + s.replace(/\s+/g, "-");
+  const ETA_INTERVAL_MS = 20 * 60 * 1000;
+  const LOC_WRITE_INTERVAL_MS = 25 * 1000;
+
+  let state = {
+    view: "role-select",
+    role: null,
+    runIndex: [],
+    currentRun: null,
+    guideName: "",
+    guidePin: "",
+    guideBus: null,
+    search: "",
+    toast: null,
+    pinInput: "",
+    roster: [],
+    newGuideName: "",
+    passengerSearchQuery: "",
+    currentBusNum: null,
+    coordTab: "dashboard",
+    courtesySelectedDestination: null,
+    editingGuideIndex: null,
+    courtesyPinInput: "",
+    forceEtaOpen: false,
+    helpdeskPinInput: "",
+    helpdeskTab: "arrivals",
+    helpdeskSearchMode: "passenger",
+    helpdeskSearchQuery: "",
+  };
+
+  let pollTimer = null, etaTimer = null, geoWatchId = null, lastGeoWrite = 0;
+  let mapInstance = null, mapMarkers = {}, syncTimers = {};
+
+  // Storage layer: backed by Firebase Realtime Database so every guide's
+  // phone and the coordinator's dashboard read/write the same live data.
+  function safeKey(key) { return key.replace(/[.#$\[\]]/g, "_"); }
+  async function getJSON(key, fallback) {
+    try {
+      const snap = await fbDb.ref(safeKey(key)).once("value");
+      if (!snap.exists()) return fallback;
+      const raw = snap.val();
+      return typeof raw === "string" ? JSON.parse(raw) : fallback;
+    } catch (e) { console.error("storage get failed", key, e); return fallback; }
+  }
+  async function setJSON(key, val) {
+    try { await fbDb.ref(safeKey(key)).set(JSON.stringify(val)); return true; }
+    catch (e) { console.error("storage set failed", key, e); showToast("\u26a0\ufe0f Couldn't save \u2014 check your Firebase config"); return false; }
+  }
+  async function deleteKey(key) {
+    try { await fbDb.ref(safeKey(key)).remove(); return true; }
+    catch (e) { console.error("storage delete failed", key, e); return false; }
+  }
+
+  async function loadIndex() { state.runIndex = await getJSON("run-index", []); }
+  async function loadRun(runId) { return await getJSON("run-" + runId, null); }
+  async function saveRun(run) { run.updatedAt = Date.now(); await setJSON("run-" + run.runId, run); scheduleSync(run); }
+  async function loadRoster() { return await getJSON("guide-roster", []); }
+  async function saveRoster(list) { await setJSON("guide-roster", list); }
+  async function loadCoordPin() { return await getJSON("coordinator-pin", null); }
+  async function saveCoordPin(pin) { await setJSON("coordinator-pin", pin); }
+  async function loadCourtesyPin() { return await getJSON("courtesy-pin", null); }
+  async function saveCourtesyPin(pin) { await setJSON("courtesy-pin", pin); }
+  async function loadHelpdeskPin() { return await getJSON("helpdesk-pin", null); }
+  async function saveHelpdeskPin(pin) { await setJSON("helpdesk-pin", pin); }
+  async function loadWebhookUrl() { return await getJSON("sheet-webhook-url", ""); }
+  async function saveWebhookUrl(url) { await setJSON("sheet-webhook-url", url); }
+
+  async function setGuideResume(pin, runId, busNum) {
+    const roster = await loadRoster();
+    const g = roster.find(x => x.pin === pin);
+    if (g) { g.lastRunId = runId; g.lastBusNum = busNum; await saveRoster(roster); }
+  }
+  async function clearGuideResume(pin) {
+    const roster = await loadRoster();
+    const g = roster.find(x => x.pin === pin);
+    if (g) { g.lastRunId = null; g.lastBusNum = null; await saveRoster(roster); }
+  }
+
+  function scheduleSync(run) {
+    if (syncTimers[run.runId]) clearTimeout(syncTimers[run.runId]);
+    syncTimers[run.runId] = setTimeout(() => syncToSheet(run), 1200);
+  }
+  async function syncToSheet(run) {
+    const url = await loadWebhookUrl();
+    if (!url) return;
+    const boarded = totalBoarded(run);
+    const total = run.manifest.length;
+    const payload = {
+      runId: run.runId, status: aggregateStatus(run), boarded, total,
+      origin: run.origin || "", destination: run.destination || "",
+      busCompany: run.busCompany || "",
+      catering: run.catering ? "Yes" : "No", notes: run.notes || "",
+      buses: run.buses.map(b => ({
+        num: b.num, guideName: b.guideName || "", status: b.status,
+        pax: busBoardedCount(run, b.num),
+        eta: b.eta ? new Date(b.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+      })),
+    };
+    try {
+      await fetch(url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload) });
+    } catch (e) { console.error("sheet sync failed", e); }
+  }
+
+  function showToast(msg) {
+    state.toast = msg; render();
+    setTimeout(() => { const el = document.getElementById("toast-el"); if (el) el.classList.remove("show"); }, 1800);
+  }
+  function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+  function startPolling(fn, ms) { stopPolling(); pollTimer = setInterval(fn, ms); }
+  function stopEtaTimer() { if (etaTimer) { clearInterval(etaTimer); etaTimer = null; } }
+  function stopGeo() { if (geoWatchId !== null && navigator.geolocation) { navigator.geolocation.clearWatch(geoWatchId); geoWatchId = null; } }
+  function teardownGuideSession() { stopPolling(); stopEtaTimer(); stopGeo(); }
+  function go(view) { state.view = view; render(); }
+
+  function busBoardedCount(run, busNum) { return run.manifest.filter(p => p.boarded && p.busNum === busNum).length; }
+  function totalBoarded(run) { return run.manifest.filter(p => p.boarded).length; }
+  function aggregateStatus(run) {
+    if (!run.buses.length) return "Not Started";
+    let minIdx = STATUS_ORDER.length - 1;
+    run.buses.forEach(b => { minIdx = Math.min(minIdx, STATUS_ORDER.indexOf(b.status)); });
+    return STATUS_ORDER[minIdx];
+  }
+  function genPin(existing) {
+    let pin; do { pin = String(Math.floor(1000 + Math.random() * 9000)); } while (existing.some(g => g.pin === pin));
+    return pin;
+  }
+  function timeAgo(ts) {
+    if (!ts) return "never";
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    return Math.floor(s / 3600) + "h ago";
+  }
+
+  function render() {
+    const root = document.getElementById("app-root");
+    root.innerHTML = "";
+    const wrap = document.createElement("div");
+    const views = {
+      "role-select": renderRoleSelect, "guide-pin": renderGuidePin,
+      "guide-run-select": renderGuideRunSelect, "guide-route-fork": renderGuideRouteFork,
+      "guide-overview": renderGuideOverview, "guide-setup": renderGuideSetup,
+      "guide-manifest": renderGuideManifest, "coord-pin": renderCoordPin,
+      "coord-home": renderCoordHome, "coord-create": renderCoordCreate,
+      "coord-run-detail": renderCoordRunDetail, "coord-bus-detail": renderCoordBusDetail,
+      "courtesy-home": renderCourtesyHome, "courtesy-pin": renderCourtesyPin,
+      "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
+    };
+    wrap.appendChild(views[state.view]());
+    root.appendChild(wrap);
+    if (state.toast) {
+      const t = document.createElement("div");
+      t.className = "toast show"; t.id = "toast-el"; t.textContent = state.toast;
+      root.appendChild(t);
+    }
+  }
+
+  function topbar(title, onBack) {
+    const bar = document.createElement("div");
+    bar.className = "topbar";
+    const brand = document.createElement("div");
+    brand.className = "brand";
+    brand.innerHTML = '<span class="dot"></span><span class="brand-text">' + (title || 'BUSCHIEF') + '</span>';
+    bar.appendChild(brand);
+    if (onBack) {
+      const btn = document.createElement("button");
+      btn.className = "back-btn"; btn.textContent = "\u2190 Back"; btn.onclick = onBack;
+      bar.appendChild(btn);
+    }
+    return bar;
+  }
+
+  // ---------- Role select ----------
+  function renderRoleSelect() {
+    const c = document.createElement("div");
+    const screen = document.createElement("div");
+    screen.className = "screen"; screen.style.paddingTop = "60px";
+    screen.innerHTML = `
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--accent); text-transform: uppercase; margin-bottom: 10px;">BusChief</div>
+      <h1>Who's checking in?</h1>
+      <p class="subtitle">Guides load a manifest, tick riders off as they board, and update bus status. Coordinators watch it all live and build the passenger runs.</p>`;
+    const grid = document.createElement("div");
+    grid.className = "role-grid";
+    const guideCard = document.createElement("button");
+    guideCard.className = "role-card";
+    guideCard.innerHTML = `<div class="kicker">Field</div><div class="title">I'm a Bus Guide</div><div class="desc">Enter your PIN, pick your run and bus, then check riders off the manifest.</div>`;
+    guideCard.onclick = () => { state.role = "guide"; state.pinInput = ""; go("guide-pin"); };
+    const coordCard = document.createElement("button");
+    coordCard.className = "role-card";
+    coordCard.innerHTML = `<div class="kicker">Dispatch</div><div class="title">I'm the Coordinator</div><div class="desc">Create runs, manage guide PINs, and watch live boarding, ETAs, and location.</div>`;
+    coordCard.onclick = () => { state.role = "coordinator"; state.pinInput = ""; go("coord-pin"); };
+    const courtesyCard = document.createElement("button");
+    courtesyCard.className = "role-card";
+    courtesyCard.innerHTML = `<div class="kicker">Reception</div><div class="title">Courtesy Flow</div><div class="desc">See every inbound bus grouped by destination, with live ETAs. Shared PIN required.</div>`;
+    courtesyCard.onclick = () => { state.courtesyPinInput = ""; go("courtesy-pin"); };
+    const helpdeskCard = document.createElement("button");
+    helpdeskCard.className = "role-card";
+    helpdeskCard.innerHTML = `<div class="kicker">Support</div><div class="title">Help Desk</div><div class="desc">Look up a passenger, a bus guide, or a Run ID. Shared PIN required.</div>`;
+    helpdeskCard.onclick = () => { state.helpdeskPinInput = ""; go("helpdesk-pin"); };
+    grid.appendChild(guideCard); grid.appendChild(coordCard); grid.appendChild(courtesyCard); grid.appendChild(helpdeskCard);
+    screen.appendChild(grid); c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Guide: PIN entry (with resume) ----------
+  function renderGuidePin() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Bus Guide", () => go("role-select")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Enter your PIN</h2><p class="subtitle">Your coordinator gave you a 4-digit PIN. It identifies you on the manifest.</p>`;
+    const input = document.createElement("input");
+    input.className = "pin-input"; input.type = "text"; input.inputMode = "numeric"; input.maxLength = 4;
+    input.value = state.pinInput; input.autofocus = true;
+    input.oninput = e => { state.pinInput = e.target.value.replace(/\D/g, "").slice(0, 4); input.value = state.pinInput; };
+    screen.appendChild(input);
+    const btn = document.createElement("button");
+    btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
+    btn.onclick = async () => {
+      if (state.pinInput.length !== 4) { showToast("Enter your 4-digit PIN"); return; }
+      const roster = await loadRoster();
+      const match = roster.find(g => g.pin === state.pinInput);
+      if (!match) { showToast("PIN not recognized \u2014 check with your coordinator"); return; }
+      state.guideName = match.name;
+      state.guidePin = match.pin;
+
+      if (match.lastRunId && match.lastBusNum) {
+        const run = await loadRun(match.lastRunId);
+        const bus = run && run.buses.find(b => b.num === match.lastBusNum);
+        if (run && bus) {
+          state.currentRun = run;
+          state.guideBus = match.lastBusNum;
+          showToast("Welcome back \u2014 resuming " + run.runId + ", Bus " + match.lastBusNum);
+          go("guide-manifest");
+          startPolling(async () => {
+            if (state.view !== "guide-manifest") return;
+            const latest = await loadRun(run.runId);
+            if (latest) { state.currentRun = latest; refreshManifestLive(); }
+          }, 4000);
+          startEtaWatcher();
+          return;
+        }
+      }
+      await loadIndex();
+      state.guideBus = null;
+      go("guide-run-select");
+      startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
+    };
+    screen.appendChild(btn);
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Guide: pick run ----------
+  function renderGuideRunSelect() {
+    const c = document.createElement("div");
+    c.appendChild(topbar(state.guideName, () => { teardownGuideSession(); go("role-select"); }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Select your run</h2><p class="subtitle" style="margin-bottom:16px;">Signed in as <b style="color:var(--text)">${esc(state.guideName)}</b>. Tap the run you're working today.</p>`;
+    if (!state.runIndex.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.innerHTML = `<div class="big">\u{1F68C}</div>No runs have been set up yet.<br/>Ask your coordinator to create one.`;
+      screen.appendChild(empty);
+    } else {
+      state.runIndex.slice().sort((a,b) => a.runId.localeCompare(b.runId)).forEach(r => {
+        const card = document.createElement("div");
+        card.className = "card";
+        const btn = document.createElement("button");
+        btn.className = "list-btn";
+        btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(r.runId)}</div><div class="run-desc">${esc(r.description || "")}</div></div><div class="chev">\u203A</div></div>`;
+        btn.onclick = async () => { stopPolling(); state.currentRun = await loadRun(r.runId); state.guideBus = null; go("guide-route-fork"); };
+        card.appendChild(btn);
+        screen.appendChild(card);
+      });
+    }
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Guide: Overview vs Execute fork ----------
+  function renderGuideRouteFork() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId, () => go("guide-run-select")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2><p class="subtitle">Look at the full picture, or jump straight into working the route.</p>`;
+    const grid = document.createElement("div");
+    grid.className = "role-grid";
+    const ov = document.createElement("button");
+    ov.className = "role-card";
+    ov.innerHTML = `<div class="kicker">Read-only</div><div class="title">Route Overview</div><div class="desc">Pickup, drop-off, catering, and any announcement notes for this run.</div>`;
+    ov.onclick = () => go("guide-overview");
+    const ex = document.createElement("button");
+    ex.className = "role-card";
+    ex.innerHTML = `<div class="kicker">Step-by-step</div><div class="title">Execute Route</div><div class="desc">Confirm staging, catering, then check off riders as they board.</div>`;
+    ex.onclick = () => go("guide-setup");
+    grid.appendChild(ov); grid.appendChild(ex);
+    screen.appendChild(grid);
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Guide: Route Overview ----------
+  function renderGuideOverview() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId, () => go("guide-route-fork")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2>`;
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="overview-row">
+        <div class="overview-label">Route</div>
+        <div class="overview-value">${esc(run.origin || "\u2014")} <span class="route-arrow">\u2192</span> ${esc(run.destination || "\u2014")}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">Staging location</div>
+        <div class="overview-value">${esc(run.stagingLocation || "\u2014")}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">Bus company</div>
+        <div class="overview-value">${run.busCompany ? esc(run.busCompany) : "\u2014 not set"}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">Catering</div>
+        <div class="overview-value">${run.catering ? "Yes \u2014 " + esc(run.cateringDetails || "details TBD") : "No catering on this run"}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">Announcements / notes</div>
+        <div class="overview-value">${run.notes ? esc(run.notes) : "No special notes."}</div>
+      </div>
+    `;
+    screen.appendChild(card);
+
+    const busLabel = document.createElement("h3");
+    busLabel.textContent = "Buses on this run";
+    screen.appendChild(busLabel);
+    const busCard = document.createElement("div");
+    busCard.className = "card";
+    run.buses.forEach(b => {
+      const row = document.createElement("div");
+      row.className = "bus-detail-row";
+      row.innerHTML = `<div class="bus-detail-left"><div class="bus-detail-num">B${b.num}</div>
+        <div><span class="status-pill ${STATUS_CLASS(b.status)}"><span class="sdot"></span>${b.status}</span>
+        <div class="bus-detail-meta">${b.guideName ? esc(b.guideName) : "No guide checked in yet"}</div></div></div>`;
+      busCard.appendChild(row);
+    });
+    screen.appendChild(busCard);
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn-primary"; btn.style.marginTop = "18px"; btn.textContent = "Execute this route";
+    btn.onclick = () => go("guide-setup");
+    screen.appendChild(btn);
+
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Guide: pick bus ----------
+  function renderGuideSetup() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId, () => go("guide-route-fork")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2><p class="subtitle">Which bus are you on, ${esc(state.guideName)}?</p>`;
+    const busGrid = document.createElement("div");
+    busGrid.className = "bus-grid";
+    run.buses.forEach(b => {
+      const tile = document.createElement("div");
+      tile.className = "bus-tile";
+      if (state.guideBus === b.num) tile.style.borderColor = "var(--brand)";
+      tile.innerHTML = `<div class="blabel">Bus</div><div class="bnum">${b.num}</div><div class="bguide">${b.guideName ? esc(b.guideName) : ""}</div>`;
+      tile.onclick = () => { state.guideBus = b.num; render(); };
+      busGrid.appendChild(tile);
+    });
+    screen.appendChild(busGrid);
+    const continueBtn = document.createElement("button");
+    continueBtn.className = "btn btn-primary"; continueBtn.style.marginTop = "22px"; continueBtn.textContent = "Continue";
+    continueBtn.onclick = async () => {
+      if (state.guideBus === null) { showToast("Select a bus first"); return; }
+      const fresh = await loadRun(run.runId);
+      const bus = fresh.buses.find(b => b.num === state.guideBus);
+      bus.guideName = state.guideName;
+      await saveRun(fresh);
+      await setGuideResume(state.guidePin, run.runId, state.guideBus);
+      state.currentRun = fresh;
+      go("guide-manifest");
+      startPolling(async () => {
+        if (state.view !== "guide-manifest") return;
+        const latest = await loadRun(run.runId);
+        if (latest) { state.currentRun = latest; refreshManifestLive(); }
+      }, 4000);
+      startEtaWatcher();
+    };
+    screen.appendChild(continueBtn);
+    c.appendChild(screen);
+    return c;
+  }
+
+  let refreshManifestLive = () => {};
+
+  function startEtaWatcher() {
+    stopEtaTimer();
+    etaTimer = setInterval(() => { if (state.view === "guide-manifest") render(); }, 30000);
+  }
+  function etaDue(bus) {
+    if (bus.status !== "In Route") return false;
+    const since = bus.etaUpdatedAt || bus.departedAt || Date.now();
+    return Date.now() - since >= ETA_INTERVAL_MS || !bus.eta;
+  }
+  function etaMinutesUntilDue(bus) {
+    const since = bus.etaUpdatedAt || bus.departedAt || Date.now();
+    const remaining = (since + ETA_INTERVAL_MS) - Date.now();
+    return Math.max(0, Math.ceil(remaining / 60000));
+  }
+  function startGeoWatch(runId, busNum) {
+    stopGeo();
+    if (!("geolocation" in navigator)) return;
+    geoWatchId = navigator.geolocation.watchPosition(
+      pos => {
+        const now = Date.now();
+        if (now - lastGeoWrite < LOC_WRITE_INTERVAL_MS) return;
+        lastGeoWrite = now;
+        updateBusLocation(runId, busNum, pos.coords.latitude, pos.coords.longitude);
+      },
+      err => { console.warn("geo error", err); },
+      { enableHighAccuracy: false, maximumAge: 20000, timeout: 15000 }
+    );
+  }
+  async function updateBusLocation(runId, busNum, lat, lng) {
+    const fresh = await loadRun(runId);
+    if (!fresh) return;
+    const bus = fresh.buses.find(b => b.num === busNum);
+    if (!bus) return;
+    bus.loc = { lat, lng, at: Date.now() };
+    await saveRun(fresh);
+    if (state.currentRun && state.currentRun.runId === runId) state.currentRun = fresh;
+  }
+
+  function statusStepperUI(run, busNum, onAdvance) {
+    const bus = run.buses.find(b => b.num === busNum);
+    const idx = STATUS_ORDER.indexOf(bus.status);
+    const box = document.createElement("div");
+    box.className = "status-stepper";
+    const label = document.createElement("div");
+    label.className = "cur-label"; label.textContent = "Bus " + busNum + " status";
+    box.appendChild(label);
+    const pill = document.createElement("span");
+    pill.className = "status-pill " + STATUS_CLASS(bus.status);
+    pill.innerHTML = `<span class="sdot"></span>${bus.status}`;
+    box.appendChild(pill);
+    if (idx < STATUS_ORDER.length - 1) {
+      const next = STATUS_ORDER[idx + 1];
+      const btn = document.createElement("button");
+      btn.className = "btn btn-secondary"; btn.style.marginTop = "12px";
+      const labelMap = { "In Route": "Mark departed / in route", "Completed": "Mark completed" };
+      btn.textContent = labelMap[next] || ("Advance to " + next);
+      btn.onclick = onAdvance;
+      box.appendChild(btn);
+    }
+    return box;
+  }
+
+  // ---------- Guide: manifest (step-gated execute flow) ----------
+  function renderGuideManifest() {
+    const run = state.currentRun;
+    const busNum = state.guideBus;
+    const myBus = () => state.currentRun.buses.find(b => b.num === busNum);
+    state.forceEtaOpen = false;
+
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Bus " + busNum, () => go("guide-setup")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+
+    const switchLink = document.createElement("button");
+    switchLink.className = "link-btn"; switchLink.style.marginBottom = "14px"; switchLink.textContent = "Not your run? Switch run";
+    switchLink.onclick = async () => { teardownGuideSession(); await loadIndex(); go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000); };
+    screen.appendChild(switchLink);
+
+    const bodyHolder = document.createElement("div");
+    screen.appendChild(bodyHolder);
+    c.appendChild(screen);
+
+    function checklistItems() {
+      return getChecklistItems(run);
+    }
+    function checklistComplete() {
+      const bus = myBus();
+      return checklistItems().every(it => !!bus[it.key]);
+    }
+    function gateStage() {
+      const bus = myBus();
+      if (bus.status === "Not Started") return "arrival";
+      return checklistComplete() ? "none" : "checklist";
+    }
+
+    async function toggleChecklistItem(key) {
+      const fresh = await loadRun(run.runId);
+      const bus = fresh.buses.find(b => b.num === busNum);
+      const newVal = !bus[key];
+      bus[key] = newVal;
+      bus[key + "At"] = newVal ? Date.now() : null;
+      // "busArrived" is its own dedicated stage that also drives the bus's tracked status
+      if (key === "busArrived") {
+        if (newVal && bus.status === "Not Started") { bus.status = "At Staging"; bus.stagingAt = Date.now(); }
+        if (!newVal && bus.status === "At Staging") { bus.status = "Not Started"; bus.stagingAt = null; }
+      }
+      await saveRun(fresh);
+      state.currentRun = fresh;
+      renderBody();
+    }
+
+    function renderBody() {
+      bodyHolder.innerHTML = "";
+      const stage = gateStage();
+
+      if (stage === "arrival") {
+        const track = document.createElement("div");
+        track.className = "step-track";
+        track.innerHTML = `<b>Bus Arrival</b> \u2014 Stage 1`;
+        bodyHolder.appendChild(track);
+        const card = document.createElement("div");
+        card.className = "prompt-card";
+        card.innerHTML = `<div class="picon">\u{1F68C}</div>
+          <div class="ptitle">Has the bus arrived at the staging location?</div>
+          <div class="pdesc">${run.stagingLocation ? esc(run.stagingLocation) : "Confirm once the bus is parked and ready."} This confirms the bus is physically on site \u2014 the coordinator sees this update immediately.</div>`;
+        const btn = document.createElement("button");
+        btn.className = "btn btn-primary"; btn.textContent = "Yes, the bus has arrived";
+        btn.onclick = () => toggleChecklistItem("busArrived");
+        card.appendChild(btn);
+        bodyHolder.appendChild(card);
+        return;
+      }
+
+      if (stage === "checklist") {
+        const items = checklistItems();
+        const bus = myBus();
+        const doneCount = items.filter(it => bus[it.key]).length;
+
+        const track = document.createElement("div");
+        track.className = "step-track";
+        track.innerHTML = `<b>Pre-Run Checklist</b> \u2014 ${doneCount} of ${items.length} complete`;
+        bodyHolder.appendChild(track);
+
+        const heading = document.createElement("p");
+        heading.className = "subtitle";
+        heading.style.marginBottom = "16px";
+        heading.textContent = "Check off each item as it's confirmed. The manifest unlocks once everything's checked.";
+        bodyHolder.appendChild(heading);
+
+        const card = document.createElement("div");
+        card.className = "card";
+        items.forEach((item, i) => {
+          const checked = !!bus[item.key];
+          const row = document.createElement("div");
+          row.className = "pax-row" + (checked ? " boarded-mine" : "");
+          if (i < items.length - 1) row.style.marginBottom = "8px";
+          row.innerHTML = `<div class="checkbox">${checked ? "\u2713" : ""}</div><div class="pax-name" style="font-size:14.5px;">${esc(item.question)}</div>`;
+          row.onclick = () => toggleChecklistItem(item.key);
+          card.appendChild(row);
+        });
+        bodyHolder.appendChild(card);
+        return;
+      }
+
+      // stage === none: full execute UI
+      const track = document.createElement("div");
+      track.className = "step-track";
+      track.innerHTML = `<b>${myBus().status === "In Route" ? "In route" : myBus().status === "Completed" ? "Completed" : "Boarding"}</b>`;
+      bodyHolder.appendChild(track);
+
+      const gpsRow = document.createElement("div");
+      gpsRow.className = "gps-status"; gpsRow.id = "gps-status-row";
+      bodyHolder.appendChild(gpsRow);
+      function updateGpsRow() {
+        const active = myBus().status === "In Route" && geoWatchId !== null;
+        gpsRow.className = "gps-status" + (active ? " live" : "");
+        gpsRow.innerHTML = `<span class="gdot"></span>${active ? "Sharing live location" : "Location off until bus is In Route"}`;
+      }
+
+      const stepperHolder = document.createElement("div");
+      bodyHolder.appendChild(stepperHolder);
+      function renderStepper() {
+        stepperHolder.innerHTML = "";
+        stepperHolder.appendChild(statusStepperUI(state.currentRun, busNum, async () => {
+          const fresh = await loadRun(run.runId);
+          const bus = fresh.buses.find(b => b.num === busNum);
+          const idx = STATUS_ORDER.indexOf(bus.status);
+          bus.status = STATUS_ORDER[idx + 1];
+          if (bus.status === "In Route") { bus.departedAt = Date.now(); startGeoWatch(run.runId, busNum); }
+          if (bus.status === "Completed") { bus.completedAt = Date.now(); stopGeo(); await clearGuideResume(state.guidePin); }
+          await saveRun(fresh);
+          state.currentRun = fresh;
+          renderStepper(); renderEtaBanner(); updateGpsRow(); renderBody2Track();
+          showToast("Bus " + busNum + " marked " + bus.status);
+        }));
+      }
+      function renderBody2Track() { track.innerHTML = `<b>${myBus().status === "In Route" ? "In route" : myBus().status === "Completed" ? "Completed" : "Boarding"}</b>`; }
+      renderStepper();
+
+      const etaHolder = document.createElement("div");
+      bodyHolder.appendChild(etaHolder);
+      function renderEtaBanner() {
+        etaHolder.innerHTML = "";
+        const bus = myBus();
+        if (bus.status !== "In Route") return;
+
+        if (!etaDue(bus) && !state.forceEtaOpen) {
+          const compact = document.createElement("div");
+          compact.style.cssText = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; padding:10px 14px; background:var(--panel-alt); border:1px solid var(--border); border-radius:10px; font-size:12.5px; color:var(--text-dim);";
+          const etaText = bus.eta
+            ? "ETA " + new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " \u00b7 next check-in in " + etaMinutesUntilDue(bus) + "m"
+            : "No ETA set \u00b7 next check-in in " + etaMinutesUntilDue(bus) + "m";
+          compact.innerHTML = `<span>${etaText}</span>`;
+          const openBtn = document.createElement("button");
+          openBtn.className = "link-btn"; openBtn.textContent = "Update now";
+          openBtn.onclick = () => { state.forceEtaOpen = true; renderEtaBanner(); };
+          compact.appendChild(openBtn);
+          etaHolder.appendChild(compact);
+          return;
+        }
+
+        const banner = document.createElement("div");
+        banner.className = "eta-banner";
+        banner.innerHTML = `<div class="eta-title">${bus.eta ? "ETA check-in" : "Set your ETA"}</div>`;
+        const row = document.createElement("div");
+        row.className = "eta-row";
+        const timeInput = document.createElement("input"); timeInput.type = "time";
+        const submitBtn = document.createElement("button");
+        submitBtn.className = "btn btn-primary"; submitBtn.style.width = "auto"; submitBtn.textContent = "Update ETA";
+        submitBtn.onclick = async () => {
+          if (!timeInput.value) { showToast("Pick a time"); return; }
+          const [hh, mm] = timeInput.value.split(":").map(Number);
+          const d = new Date(); d.setHours(hh, mm, 0, 0);
+          const fresh = await loadRun(run.runId);
+          const b = fresh.buses.find(b2 => b2.num === busNum);
+          b.eta = d.getTime(); b.etaUpdatedAt = Date.now();
+          await saveRun(fresh);
+          state.currentRun = fresh;
+          state.forceEtaOpen = false;
+          renderEtaBanner();
+          showToast("ETA updated");
+        };
+        row.appendChild(timeInput); row.appendChild(submitBtn);
+        banner.appendChild(row);
+        if (bus.eta) {
+          const cur = document.createElement("div"); cur.className = "eta-current";
+          cur.textContent = "Current ETA: " + new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " \u00b7 last updated " + timeAgo(bus.etaUpdatedAt);
+          banner.appendChild(cur);
+        }
+        if (state.forceEtaOpen && !etaDue(bus)) {
+          const closeBtn = document.createElement("button");
+          closeBtn.className = "btn btn-ghost"; closeBtn.style.marginTop = "8px"; closeBtn.textContent = "Close";
+          closeBtn.onclick = () => { state.forceEtaOpen = false; renderEtaBanner(); };
+          banner.appendChild(closeBtn);
+        }
+        etaHolder.appendChild(banner);
+      }
+      renderEtaBanner();
+      updateGpsRow();
+      if (myBus().status === "In Route") startGeoWatch(run.runId, busNum);
+
+      const boarded = totalBoarded(state.currentRun);
+      const mine = busBoardedCount(state.currentRun, busNum);
+      const total = state.currentRun.manifest.length;
+      const stats = document.createElement("div");
+      stats.className = "stat-strip";
+      stats.innerHTML = `<div class="stat-box"><div class="num">${mine}</div><div class="lbl">On this bus</div></div>
+        <div class="stat-box"><div class="num">${boarded}/${total}</div><div class="lbl">Run boarded</div></div>
+        <div class="stat-box"><div class="num">${total - boarded}</div><div class="lbl">Remaining</div></div>`;
+      bodyHolder.appendChild(stats);
+
+      const searchWrap = document.createElement("div");
+      searchWrap.className = "search-wrap";
+      const search = document.createElement("input");
+      search.type = "text"; search.placeholder = "Search manifest\u2026"; search.value = state.search;
+      search.oninput = e => { state.search = e.target.value; renderManifestList(); };
+      searchWrap.appendChild(search);
+      bodyHolder.appendChild(searchWrap);
+
+      const listHolder = document.createElement("div");
+      listHolder.className = "pax-list"; listHolder.id = "pax-list-holder";
+      bodyHolder.appendChild(listHolder);
+
+      function renderManifestList() {
+        const holder = document.getElementById("pax-list-holder");
+        if (!holder) return;
+        holder.innerHTML = "";
+        const q = state.search.trim().toLowerCase();
+        const filtered = state.currentRun.manifest.filter(p => !q || p.name.toLowerCase().includes(q));
+        if (!filtered.length) { holder.innerHTML = `<div class="empty-state" style="padding:30px 10px;">No matches.</div>`; return; }
+        filtered.forEach(p => {
+          const row = document.createElement("div");
+          const mineRow = p.boarded && p.busNum === busNum;
+          const otherRow = p.boarded && p.busNum !== busNum;
+          const otherGuide = otherRow ? (state.currentRun.buses.find(b => b.num === p.busNum) || {}).guideName : null;
+          row.className = "pax-row" + (mineRow ? " boarded-mine" : "") + (otherRow ? " boarded-other" : "");
+          row.innerHTML = `<div class="checkbox">${p.boarded ? "\u2713" : ""}</div><div class="pax-name">${esc(p.name)}</div>${otherRow ? `<div class="pax-tag">Bus ${p.busNum}${otherGuide ? " \u00b7 " + esc(otherGuide) : ""}</div>` : ""}`;
+          if (!otherRow) {
+            row.onclick = async () => {
+              const fresh = await loadRun(run.runId);
+              const person = fresh.manifest.find(x => x.id === p.id);
+              if (person.boarded && person.busNum === busNum) { person.boarded = false; person.busNum = null; person.boardedAt = null; }
+              else if (!person.boarded) { person.boarded = true; person.busNum = busNum; person.boardedAt = Date.now(); }
+              else return;
+              await saveRun(fresh);
+              state.currentRun = fresh;
+              renderManifestList();
+              updateStatsInPlace();
+            };
+          }
+          holder.appendChild(row);
+        });
+      }
+      function updateStatsInPlace() {
+        const b2 = busBoardedCount(state.currentRun, busNum);
+        const t2 = totalBoarded(state.currentRun);
+        const tot = state.currentRun.manifest.length;
+        stats.innerHTML = `<div class="stat-box"><div class="num">${b2}</div><div class="lbl">On this bus</div></div>
+          <div class="stat-box"><div class="num">${t2}/${tot}</div><div class="lbl">Run boarded</div></div>
+          <div class="stat-box"><div class="num">${tot - t2}</div><div class="lbl">Remaining</div></div>`;
+      }
+      refreshManifestLive = () => { renderManifestList(); updateStatsInPlace(); renderEtaBanner(); updateGpsRow(); };
+      renderManifestList();
+    }
+
+    renderBody();
+    return c;
+  }
+
+  // ---------- Coordinator: PIN gate ----------
+  function renderCoordPin() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Coordinator", () => go("role-select")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    const holder = document.createElement("div");
+    screen.appendChild(holder);
+    c.appendChild(screen);
+    loadCoordPin().then(pw => {
+      if (!pw) {
+        holder.innerHTML = "";
+        const h = document.createElement("h2"); h.textContent = "Create a coordinator password";
+        const sub = document.createElement("p"); sub.className = "subtitle";
+        sub.textContent = "No coordinator password is set yet. Create one now (at least 8 characters) \u2014 you'll need it to get back in.";
+        holder.appendChild(h); holder.appendChild(sub);
+
+        const lbl1 = document.createElement("label"); lbl1.textContent = "Password";
+        const p1 = document.createElement("input");
+        p1.type = "password"; p1.placeholder = "At least 8 characters"; p1.autocomplete = "new-password";
+        const lbl2 = document.createElement("label"); lbl2.textContent = "Confirm password";
+        const p2 = document.createElement("input");
+        p2.type = "password"; p2.autocomplete = "new-password";
+        holder.appendChild(lbl1); holder.appendChild(p1); holder.appendChild(lbl2); holder.appendChild(p2);
+
+        const btn = document.createElement("button");
+        btn.className = "btn btn-primary"; btn.style.marginTop = "18px"; btn.textContent = "Create password & continue";
+        btn.onclick = async () => {
+          if (p1.value.length < 8) { showToast("Password must be at least 8 characters"); return; }
+          if (p1.value !== p2.value) { showToast("Passwords don't match"); return; }
+          await saveCoordPin(p1.value);
+          state.coordTab = "dashboard";
+          go("coord-home");
+        };
+        holder.appendChild(btn);
+      } else {
+        holder.innerHTML = "";
+        const h = document.createElement("h2"); h.textContent = "Enter coordinator password";
+        holder.appendChild(h);
+        const label = document.createElement("label"); label.textContent = "Password";
+        const input = document.createElement("input");
+        input.type = "password"; input.autocomplete = "current-password"; input.autofocus = true;
+        holder.appendChild(label); holder.appendChild(input);
+        const btn = document.createElement("button");
+        btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
+        btn.onclick = async () => {
+          if (input.value !== pw) { showToast("Incorrect password"); return; }
+          state.coordTab = "dashboard";
+          go("coord-home");
+        };
+        input.onkeydown = e => { if (e.key === "Enter") btn.click(); };
+        holder.appendChild(btn);
+      }
+    });
+    return c;
+  }
+
+  // ---------- Coordinator: tabbed home (Dashboard / Search / Courtesy Flow / Settings) ----------
+  function renderCoordHome() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Coordinator", () => { stopPolling(); go("role-select"); }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.textContent = "Guides sign in with their own PIN. This data syncs to your Google Sheet if you've connected one in Settings.";
+    screen.appendChild(banner);
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "tab-bar";
+    const tabs = [
+      { id: "dashboard", label: "Dashboard", icon: "\u{1F4CA}" },
+      { id: "search", label: "Search", icon: "\u{1F50D}" },
+      { id: "courtesy", label: "Courtesy Flow", icon: "\u{1F697}" },
+      { id: "settings", label: "Settings", icon: "\u2699\uFE0F" },
+    ];
+    tabs.forEach(t => {
+      const btn = document.createElement("button");
+      btn.className = "tab-btn" + (state.coordTab === t.id ? " active" : "");
+      btn.innerHTML = `<span>${t.icon}</span> ${t.label}`;
+      btn.onclick = () => { state.coordTab = t.id; render(); };
+      tabBar.appendChild(btn);
+    });
+    screen.appendChild(tabBar);
+
+    const contentHolder = document.createElement("div");
+    contentHolder.innerHTML = `<div class="empty-state" style="padding:30px 0;">Loading\u2026</div>`;
+    screen.appendChild(contentHolder);
+    c.appendChild(screen);
+
+    async function refresh() {
+      if (state.view !== "coord-home") return;
+      await loadIndex();
+      const runs = state.runIndex.length
+        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        : [];
+      if (state.view !== "coord-home") return;
+      contentHolder.innerHTML = "";
+      if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
+      else if (state.coordTab === "search") contentHolder.appendChild(buildSearchTab(runs));
+      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs));
+      else if (state.coordTab === "settings") contentHolder.appendChild(buildSettingsTab());
+    }
+
+    refresh();
+    startPolling(refresh, 5000);
+    return c;
+  }
+
+  // ---------- Dashboard tab: global stats + run list ----------
+  function buildDashboardTab(runs) {
+    const wrap = document.createElement("div");
+
+    if (!runs.length) {
+      wrap.innerHTML = `<div class="empty-state"><div class="big">\u{1F4CB}</div>No runs yet. Head to Settings to create one or import a batch from Excel.</div>`;
+      return wrap;
+    }
+
+    const byStatus = {};
+    STATUS_ORDER.forEach(s => { byStatus[s] = { buses: 0, pax: 0 }; });
+    let grandBuses = 0, grandPax = 0, completedRuns = 0, inRouteBuses = 0, totalBoardedAllRuns = 0;
+    runs.forEach(run => {
+      run.buses.forEach(b => {
+        const pax = busBoardedCount(run, b.num);
+        byStatus[b.status].buses += 1;
+        byStatus[b.status].pax += pax;
+        grandBuses += 1; grandPax += pax;
+        if (b.status === "In Route") inRouteBuses += 1;
+      });
+      totalBoardedAllRuns += totalBoarded(run);
+      if (aggregateStatus(run) === "Completed") completedRuns += 1;
+    });
+
+    const topStrip = document.createElement("div");
+    topStrip.className = "stat-strip";
+    topStrip.innerHTML = `
+      <div class="stat-box"><div class="num">${runs.length}</div><div class="lbl">Total runs</div></div>
+      <div class="stat-box"><div class="num">${completedRuns}</div><div class="lbl">Runs completed</div></div>
+      <div class="stat-box"><div class="num">${inRouteBuses}</div><div class="lbl">Buses en route</div></div>
+      <div class="stat-box"><div class="num">${totalBoardedAllRuns}</div><div class="lbl">Passengers boarded</div></div>
+    `;
+    wrap.appendChild(topStrip);
+
+    const breakdownLabel = document.createElement("h3");
+    breakdownLabel.textContent = "Buses & passengers by stage";
+    breakdownLabel.style.margin = "16px 0 8px";
+    wrap.appendChild(breakdownLabel);
+
+    const breakdownCard = document.createElement("div");
+    breakdownCard.className = "card";
+    STATUS_ORDER.forEach(s => {
+      const t = byStatus[s];
+      const row = document.createElement("div");
+      row.className = "bus-detail-row";
+      row.innerHTML = `<div class="bus-detail-left"><span class="status-pill ${STATUS_CLASS(s)}"><span class="sdot"></span>${s}</span></div>
+        <div class="bus-detail-count">${t.buses} bus${t.buses === 1 ? "" : "es"} \u00b7 ${t.pax} pax</div>`;
+      breakdownCard.appendChild(row);
+    });
+    const totalRow = document.createElement("div");
+    totalRow.className = "bus-detail-row"; totalRow.style.borderTop = "2px solid var(--border)";
+    totalRow.innerHTML = `<div class="bus-detail-left"><span style="font-family:var(--mono); font-size:12px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.05em;">Total</span></div>
+      <div class="bus-detail-count"><b>${grandBuses} buses \u00b7 ${grandPax} pax</b></div>`;
+    breakdownCard.appendChild(totalRow);
+    wrap.appendChild(breakdownCard);
+
+    const listHeading = document.createElement("h3");
+    listHeading.textContent = "All runs";
+    listHeading.style.margin = "22px 0 8px";
+    wrap.appendChild(listHeading);
+
+    runs.slice().sort((a, b) => a.runId.localeCompare(b.runId)).forEach(run => {
+      const boarded = totalBoarded(run);
+      const total = run.manifest.length;
+      const agg = aggregateStatus(run);
+      const card = document.createElement("div");
+      card.className = "card";
+      const btn = document.createElement("button");
+      btn.className = "list-btn";
+      const chips = run.buses.map(b => `<span class="status-pill ${STATUS_CLASS(b.status)}" style="margin-right:6px;"><span class="sdot"></span>Bus ${b.num}</span>`).join("");
+      btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>${run.busCompany ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}</div></div>
+        <div style="margin:10px 0 8px;">${chips}</div>
+        <div class="run-row"><span class="status-pill ${STATUS_CLASS(agg)}"><span class="sdot"></span>${agg}</span><span style="font-family:var(--mono); font-size:13px;">${boarded} / ${total} boarded</span></div>`;
+      btn.onclick = async () => { stopPolling(); state.currentRun = await loadRun(run.runId); go("coord-run-detail"); };
+      card.appendChild(btn);
+      wrap.appendChild(card);
+    });
+
+    return wrap;
+  }
+
+  // ---------- Search tab: passenger lookup across every run ----------
+  function buildSearchTab(runs) {
+    const wrap = document.createElement("div");
+    const heading = document.createElement("h2");
+    heading.textContent = "Find a passenger";
+    wrap.appendChild(heading);
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Search by name across every run to see whether they've boarded, which bus, and who the guide is.";
+    wrap.appendChild(sub);
+
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Passenger name\u2026";
+    searchInput.value = state.passengerSearchQuery;
+    searchInput.autofocus = true;
+    wrap.appendChild(searchInput);
+
+    const results = document.createElement("div");
+    results.style.marginTop = "14px";
+    wrap.appendChild(results);
+
+    function renderResults() {
+      const q = state.passengerSearchQuery.trim().toLowerCase();
+      results.innerHTML = "";
+      if (!q) return;
+      const matches = [];
+      runs.forEach(run => {
+        run.manifest.forEach(p => {
+          if (p.name.toLowerCase().includes(q)) matches.push({ run, person: p });
+        });
+      });
+      if (!matches.length) {
+        results.innerHTML = `<div class="empty-state" style="padding:20px 0;">No passenger matches "${esc(state.passengerSearchQuery)}".</div>`;
+        return;
+      }
+      matches.slice(0, 30).forEach(({ run, person }) => {
+        const bus = person.boarded ? run.buses.find(b => b.num === person.busNum) : null;
+        const card = document.createElement("div");
+        card.className = "card";
+        const row = document.createElement("button");
+        row.className = "list-btn";
+        row.innerHTML = `<div class="run-row"><b style="font-size:14.5px;">${esc(person.name)}</b>
+            <span class="run-id" style="font-size:12px;">${esc(run.runId)}</span></div>
+          <div class="bus-detail-meta" style="margin-top:4px;">
+            ${person.boarded
+              ? `Boarded &middot; Bus ${person.busNum}${bus && bus.guideName ? " &middot; Guide: " + esc(bus.guideName) : ""}`
+              : "Not yet boarded &middot; " + esc(run.description || run.runId)}
+          </div>`;
+        row.onclick = async () => {
+          stopPolling();
+          state.currentRun = await loadRun(run.runId);
+          if (person.boarded) { state.currentBusNum = person.busNum; go("coord-bus-detail"); }
+          else { go("coord-run-detail"); }
+        };
+        card.appendChild(row);
+        results.appendChild(card);
+      });
+      if (matches.length > 30) {
+        const more = document.createElement("div");
+        more.className = "subtitle"; more.style.fontSize = "12px";
+        more.textContent = (matches.length - 30) + " more match" + (matches.length - 30 === 1 ? "" : "es") + " \u2014 narrow your search to see them.";
+        results.appendChild(more);
+      }
+    }
+    searchInput.oninput = e => { state.passengerSearchQuery = e.target.value; renderResults(); };
+    renderResults();
+    return wrap;
+  }
+
+  // ---------- Courtesy Flow content: runs grouped by destination ----------
+  // Shared between the Coordinator's "Courtesy Flow" tab and the standalone
+  // no-PIN Courtesy Flow role reachable from the role-select screen.
+  function groupRunsByDestination(runs) {
+    const groups = {};
+    runs.forEach(run => {
+      const dest = (run.destination || "").trim();
+      const key = dest ? dest.toLowerCase() : "\u0000unspecified";
+      if (!groups[key]) groups[key] = { label: dest || "Unspecified destination", entries: [] };
+      run.buses.forEach(b => groups[key].entries.push({ run, bus: b }));
+    });
+    return groups;
+  }
+
+  function buildCourtesyContent(runs) {
+    const wrap = document.createElement("div");
+    const groups = groupRunsByDestination(runs);
+    const destKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
+
+    if (state.courtesySelectedDestination && groups[state.courtesySelectedDestination]) {
+      const g = groups[state.courtesySelectedDestination];
+      const backBtn = document.createElement("button");
+      backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All destinations";
+      backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
+      wrap.appendChild(backBtn);
+
+      const heading = document.createElement("h2");
+      heading.textContent = g.label;
+      wrap.appendChild(heading);
+      const sub = document.createElement("p");
+      sub.className = "subtitle";
+      sub.textContent = "Every bus heading here, soonest arrival first.";
+      wrap.appendChild(sub);
+
+      const priority = { "In Route": 0, "At Staging": 1, "Not Started": 2, "Completed": 3 };
+      const sorted = g.entries.slice().sort((a, b) => {
+        const pa = priority[a.bus.status], pb = priority[b.bus.status];
+        if (pa !== pb) return pa - pb;
+        const ea = a.bus.eta || Infinity, eb = b.bus.eta || Infinity;
+        return ea - eb;
+      });
+      if (!sorted.length) {
+        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination.</div>`;
+      }
+      sorted.forEach(({ run, bus }) => {
+        const pax = busBoardedCount(run, bus.num);
+        const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `<div class="run-row">
+            <div><div class="run-id">${esc(run.runId)} \u00b7 Bus ${bus.num}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
+          </div>
+          <div class="bus-detail-meta" style="margin-top:8px; font-size:13px;">
+            Guide: ${bus.guideName ? esc(bus.guideName) : "\u2014"} &middot; ETA: <b style="color:var(--text);">${etaText}</b> &middot; ${pax} passenger${pax === 1 ? "" : "s"}
+          </div>
+          ${run.busCompany ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}`;
+        wrap.appendChild(card);
+      });
+      return wrap;
+    }
+
+    const heading = document.createElement("h2");
+    heading.textContent = "Courtesy Flow \u2014 by destination";
+    wrap.appendChild(heading);
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Pick a destination to see every inbound bus and its ETA.";
+    wrap.appendChild(sub);
+
+    if (!destKeys.length) {
+      wrap.innerHTML += `<div class="empty-state"><div class="big">\u{1F3E8}</div>No runs with a destination set yet.</div>`;
+      return wrap;
+    }
+
+    destKeys.forEach(key => {
+      const g = groups[key];
+      const activeBuses = g.entries.filter(e => e.bus.status !== "Completed");
+      const nextEta = activeBuses
+        .filter(e => e.bus.status === "In Route" && e.bus.eta)
+        .map(e => e.bus.eta)
+        .sort((a, b) => a - b)[0];
+      const card = document.createElement("div");
+      card.className = "card";
+      const btn = document.createElement("button");
+      btn.className = "list-btn";
+      btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(g.label)}</div>
+          <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} inbound</div></div>
+          <div class="chev">\u203A</div></div>
+        ${nextEta ? `<div class="bus-detail-meta" style="margin-top:8px;">Next arrival: <b style="color:var(--accent);">${new Date(nextEta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></div>` : ""}`;
+      btn.onclick = () => { state.courtesySelectedDestination = key; render(); };
+      card.appendChild(btn);
+      wrap.appendChild(card);
+    });
+
+    return wrap;
+  }
+
+  // ---------- Standalone Courtesy Flow role: shared PIN gate ----------
+  function renderCourtesyPin() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Courtesy Flow", () => go("role-select")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    const holder = document.createElement("div");
+    screen.appendChild(holder);
+    c.appendChild(screen);
+
+    loadCourtesyPin().then(pin => {
+      holder.innerHTML = "";
+      if (!pin) {
+        const h = document.createElement("h2"); h.textContent = "Courtesy Flow isn't set up yet";
+        const sub = document.createElement("p"); sub.className = "subtitle";
+        sub.textContent = "No Courtesy Flow PIN has been set. Ask your coordinator to generate one from Settings, then come back here.";
+        holder.appendChild(h); holder.appendChild(sub);
+        return;
+      }
+      const h = document.createElement("h2"); h.textContent = "Enter the Courtesy Flow PIN";
+      const sub = document.createElement("p"); sub.className = "subtitle";
+      sub.textContent = "One shared PIN for the whole courtesy/reception team \u2014 ask your coordinator if you don't have it.";
+      holder.appendChild(h); holder.appendChild(sub);
+      const input = document.createElement("input");
+      input.className = "pin-input"; input.type = "text"; input.inputMode = "numeric"; input.maxLength = 4;
+      input.autofocus = true;
+      input.oninput = e => { input.value = e.target.value.replace(/\D/g, "").slice(0, 4); };
+      holder.appendChild(input);
+      const btn = document.createElement("button");
+      btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
+      btn.onclick = () => {
+        if (input.value !== pin) { showToast("Incorrect PIN"); return; }
+        state.courtesySelectedDestination = null;
+        go("courtesy-home");
+      };
+      holder.appendChild(btn);
+    });
+    return c;
+  }
+
+  // ---------- Standalone Courtesy Flow role (shared PIN, no individual login) ----------
+  function renderCourtesyHome() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Courtesy Flow", () => { stopPolling(); state.courtesySelectedDestination = null; go("role-select"); }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    const holder = document.createElement("div");
+    holder.innerHTML = `<div class="empty-state" style="padding:30px 0;">Loading\u2026</div>`;
+    screen.appendChild(holder);
+    c.appendChild(screen);
+
+    async function refresh() {
+      if (state.view !== "courtesy-home") return;
+      await loadIndex();
+      const runs = state.runIndex.length
+        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        : [];
+      if (state.view !== "courtesy-home") return;
+      holder.innerHTML = "";
+      holder.appendChild(buildCourtesyContent(runs));
+    }
+    refresh();
+    startPolling(refresh, 5000);
+    return c;
+  }
+
+  // ---------- Help Desk role: shared PIN gate ----------
+  function renderHelpdeskPin() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Help Desk", () => go("role-select")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    const holder = document.createElement("div");
+    screen.appendChild(holder);
+    c.appendChild(screen);
+
+    loadHelpdeskPin().then(pin => {
+      holder.innerHTML = "";
+      if (!pin) {
+        const h = document.createElement("h2"); h.textContent = "Help Desk isn't set up yet";
+        const sub = document.createElement("p"); sub.className = "subtitle";
+        sub.textContent = "No Help Desk PIN has been set. Ask your coordinator to generate one from Settings, then come back here.";
+        holder.appendChild(h); holder.appendChild(sub);
+        return;
+      }
+      const h = document.createElement("h2"); h.textContent = "Enter the Help Desk PIN";
+      const sub = document.createElement("p"); sub.className = "subtitle";
+      sub.textContent = "One shared PIN for the whole help desk team \u2014 ask your coordinator if you don't have it.";
+      holder.appendChild(h); holder.appendChild(sub);
+      const input = document.createElement("input");
+      input.className = "pin-input"; input.type = "text"; input.inputMode = "numeric"; input.maxLength = 4;
+      input.autofocus = true;
+      input.oninput = e => { input.value = e.target.value.replace(/\D/g, "").slice(0, 4); };
+      holder.appendChild(input);
+      const btn = document.createElement("button");
+      btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
+      btn.onclick = () => {
+        if (input.value !== pin) { showToast("Incorrect PIN"); return; }
+        state.helpdeskTab = "arrivals";
+        go("helpdesk-home");
+      };
+      input.onkeydown = e => { if (e.key === "Enter") btn.click(); };
+      holder.appendChild(btn);
+    });
+    return c;
+  }
+
+  function contactLinksHtml(guide) {
+    const phone = guide && guide.phone ? guide.phone : "";
+    const email = guide && guide.email ? guide.email : "";
+    const bits = [];
+    if (phone) bits.push(`<a href="tel:${esc(phone.replace(/[^+\d]/g, ""))}" style="color:var(--brand); text-decoration:none;">\u{1F4DE} ${esc(phone)}</a>`);
+    if (email) bits.push(`<a href="mailto:${esc(email)}" style="color:var(--brand); text-decoration:none;">\u2709\uFE0F ${esc(email)}</a>`);
+    return bits.length ? bits.join(" &middot; ") : "No contact info on file";
+  }
+
+  // ---------- Help Desk role (shared PIN): arrivals + 3-way search ----------
+  function renderHelpdeskHome() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Help Desk", () => { stopPolling(); state.courtesySelectedDestination = null; go("role-select"); }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "tab-bar";
+    const tabs = [
+      { id: "arrivals", label: "Arrivals", icon: "\u{1F697}" },
+      { id: "search", label: "Search", icon: "\u{1F50D}" },
+    ];
+    tabs.forEach(t => {
+      const btn = document.createElement("button");
+      btn.className = "tab-btn" + (state.helpdeskTab === t.id ? " active" : "");
+      btn.innerHTML = `<span>${t.icon}</span> ${t.label}`;
+      btn.onclick = () => { state.helpdeskTab = t.id; render(); };
+      tabBar.appendChild(btn);
+    });
+    screen.appendChild(tabBar);
+
+    const contentHolder = document.createElement("div");
+    contentHolder.innerHTML = `<div class="empty-state" style="padding:30px 0;">Loading\u2026</div>`;
+    screen.appendChild(contentHolder);
+    c.appendChild(screen);
+
+    async function refresh() {
+      if (state.view !== "helpdesk-home") return;
+      await loadIndex();
+      const runs = state.runIndex.length
+        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        : [];
+      const roster = await loadRoster();
+      if (state.view !== "helpdesk-home") return;
+      contentHolder.innerHTML = "";
+      if (state.helpdeskTab === "arrivals") contentHolder.appendChild(buildCourtesyContent(runs));
+      else contentHolder.appendChild(buildHelpdeskSearchTab(runs, roster));
+    }
+    refresh();
+    startPolling(refresh, 5000);
+    return c;
+  }
+
+  function buildHelpdeskSearchTab(runs, roster) {
+    const wrap = document.createElement("div");
+    const heading = document.createElement("h2");
+    heading.textContent = "Look someone up";
+    wrap.appendChild(heading);
+
+    const modeBar = document.createElement("div");
+    modeBar.className = "tab-bar"; modeBar.style.marginBottom = "14px";
+    const modes = [
+      { id: "passenger", label: "Passenger" },
+      { id: "guide", label: "Bus Guide" },
+      { id: "runid", label: "Run ID" },
+    ];
+    modes.forEach(m => {
+      const btn = document.createElement("button");
+      btn.className = "tab-btn" + (state.helpdeskSearchMode === m.id ? " active" : "");
+      btn.textContent = m.label;
+      btn.onclick = () => { state.helpdeskSearchMode = m.id; state.helpdeskSearchQuery = ""; render(); };
+      modeBar.appendChild(btn);
+    });
+    wrap.appendChild(modeBar);
+
+    const placeholders = {
+      passenger: "Passenger name\u2026",
+      guide: "Bus guide name\u2026",
+      runid: "Run ID, e.g. RUN-001\u2026",
+    };
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = placeholders[state.helpdeskSearchMode];
+    searchInput.value = state.helpdeskSearchQuery;
+    searchInput.autofocus = true;
+    wrap.appendChild(searchInput);
+
+    const results = document.createElement("div");
+    results.style.marginTop = "14px";
+    wrap.appendChild(results);
+
+    function renderPassengerResults(q) {
+      const matches = [];
+      runs.forEach(run => {
+        run.manifest.forEach(p => {
+          if (p.name.toLowerCase().includes(q)) matches.push({ run, person: p });
+        });
+      });
+      if (!matches.length) { results.innerHTML = `<div class="empty-state" style="padding:20px 0;">No passenger matches.</div>`; return; }
+      matches.slice(0, 30).forEach(({ run, person }) => {
+        const bus = person.boarded ? run.buses.find(b => b.num === person.busNum) : null;
+        const guide = bus && bus.guideName ? roster.find(g => g.name === bus.guideName) : null;
+        const card = document.createElement("div"); card.className = "card";
+        card.innerHTML = `<div class="run-row"><b style="font-size:14.5px;">${esc(person.name)}</b>
+            <span class="run-id" style="font-size:12px;">${esc(run.runId)}</span></div>
+          <div class="bus-detail-meta" style="margin-top:4px;">
+            ${person.boarded
+              ? `Boarded &middot; Bus ${person.busNum}${bus && bus.guideName ? " &middot; Guide: " + esc(bus.guideName) : ""}`
+              : "Not yet boarded &middot; " + esc(run.description || run.runId)}
+          </div>
+          ${bus && bus.guideName ? `<div class="bus-detail-meta" style="margin-top:6px;">${contactLinksHtml(guide)}</div>` : ""}`;
+        results.appendChild(card);
+      });
+    }
+
+    function renderGuideResults(q) {
+      const matches = roster.filter(g => g.name.toLowerCase().includes(q));
+      if (!matches.length) { results.innerHTML = `<div class="empty-state" style="padding:20px 0;">No guide matches.</div>`; return; }
+      matches.slice(0, 30).forEach(g => {
+        const assignments = [];
+        runs.forEach(run => {
+          run.buses.forEach(b => {
+            if (b.guideName === g.name) assignments.push({ run, bus: b });
+          });
+        });
+        const card = document.createElement("div"); card.className = "card";
+        card.innerHTML = `<div class="run-row"><b style="font-size:14.5px;">${esc(g.name)}</b></div>
+          <div class="bus-detail-meta" style="margin-top:4px;">${contactLinksHtml(g)}</div>`;
+        if (assignments.length) {
+          assignments.forEach(({ run, bus }) => {
+            const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+            const row = document.createElement("div");
+            row.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;";
+            row.innerHTML = `<span style="font-size:13px;">${esc(run.runId)} \u00b7 Bus ${bus.num} \u00b7 ETA ${etaText}</span>
+              <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
+            card.appendChild(row);
+          });
+        } else {
+          const none = document.createElement("div");
+          none.style.cssText = "margin-top:8px; font-size:12.5px; color:var(--text-dim);";
+          none.textContent = "Not currently checked into any bus.";
+          card.appendChild(none);
+        }
+        results.appendChild(card);
+      });
+    }
+
+    function renderRunIdResults(q) {
+      const matches = runs.filter(r => r.runId.toLowerCase().includes(q));
+      if (!matches.length) { results.innerHTML = `<div class="empty-state" style="padding:20px 0;">No Run ID matches.</div>`; return; }
+      matches.slice(0, 20).forEach(run => {
+        const agg = aggregateStatus(run);
+        const card = document.createElement("div"); card.className = "card";
+        card.innerHTML = `<div class="run-row">
+            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>${run.busCompany ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}</div>
+            <span class="status-pill ${STATUS_CLASS(agg)}"><span class="sdot"></span>${agg}</span>
+          </div>`;
+        run.buses.forEach(bus => {
+          const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+          const row = document.createElement("div");
+          row.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;";
+          row.innerHTML = `<span style="font-size:13px;">Bus ${bus.num} \u00b7 ${bus.guideName ? esc(bus.guideName) : "No guide"} \u00b7 ETA ${etaText}</span>
+            <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
+          card.appendChild(row);
+        });
+        results.appendChild(card);
+      });
+    }
+
+    function renderResults() {
+      const q = state.helpdeskSearchQuery.trim().toLowerCase();
+      results.innerHTML = "";
+      if (!q) return;
+      if (state.helpdeskSearchMode === "passenger") renderPassengerResults(q);
+      else if (state.helpdeskSearchMode === "guide") renderGuideResults(q);
+      else renderRunIdResults(q);
+    }
+    searchInput.oninput = e => { state.helpdeskSearchQuery = e.target.value; renderResults(); };
+    renderResults();
+    return wrap;
+  }
+
+  // ---------- Settings tab: runs setup, guide roster, Google Sheet sync ----------
+  function buildSettingsTab() {
+    const wrap = document.createElement("div");
+
+    const runsHeading = document.createElement("h2");
+    runsHeading.textContent = "Runs";
+    wrap.appendChild(runsHeading);
+    const runsBtnRow = document.createElement("div");
+    runsBtnRow.className = "btn-row"; runsBtnRow.style.marginBottom = "10px";
+    const newBtn = document.createElement("button");
+    newBtn.className = "btn btn-primary"; newBtn.textContent = "+ New run"; newBtn.onclick = () => go("coord-create");
+    const templateBtn = document.createElement("button");
+    templateBtn.className = "btn btn-ghost"; templateBtn.textContent = "Download template";
+    templateBtn.onclick = downloadImportTemplate;
+    runsBtnRow.appendChild(newBtn); runsBtnRow.appendChild(templateBtn);
+    wrap.appendChild(runsBtnRow);
+
+    const importBtn = document.createElement("button");
+    importBtn.className = "btn btn-secondary"; importBtn.style.marginBottom = "26px"; importBtn.textContent = "\u{1F4E5} Import runs from Excel";
+    const fileInput = document.createElement("input");
+    fileInput.type = "file"; fileInput.accept = ".xlsx,.xls,.csv"; fileInput.style.display = "none";
+    fileInput.onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      importBtn.disabled = true; importBtn.textContent = "Importing\u2026";
+      try { await handleExcelImport(f); }
+      catch (err) { console.error(err); showToast("Import failed \u2014 check the file matches the template"); }
+      importBtn.disabled = false; importBtn.textContent = "\u{1F4E5} Import runs from Excel";
+    };
+    importBtn.onclick = () => fileInput.click();
+    wrap.appendChild(importBtn); wrap.appendChild(fileInput);
+
+    const guidesHeading = document.createElement("h2");
+    guidesHeading.textContent = "Guides";
+    wrap.appendChild(guidesHeading);
+
+    const rosterHolder = document.createElement("div");
+    wrap.appendChild(rosterHolder);
+
+    const nameLabel = document.createElement("label"); nameLabel.textContent = "Add a guide";
+    const nameInput = document.createElement("input"); nameInput.type = "text"; nameInput.placeholder = "Guide's full name";
+    const phoneLabel = document.createElement("label"); phoneLabel.textContent = "Phone";
+    const phoneInput = document.createElement("input"); phoneInput.type = "text"; phoneInput.placeholder = "(555) 010-1234";
+    const emailLabel = document.createElement("label"); emailLabel.textContent = "Email";
+    const emailInput = document.createElement("input"); emailInput.type = "text"; emailInput.placeholder = "guide@example.com";
+    [nameLabel, nameInput, phoneLabel, phoneInput, emailLabel, emailInput].forEach(el => wrap.appendChild(el));
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn btn-primary"; addBtn.style.marginTop = "10px"; addBtn.textContent = "Generate PIN & add";
+    addBtn.onclick = async () => {
+      const name = nameInput.value.trim();
+      if (!name) { showToast("Enter a name"); return; }
+      const roster = await loadRoster();
+      const pin = genPin(roster);
+      roster.push({ name, phone: phoneInput.value.trim(), email: emailInput.value.trim(), pin, lastRunId: null, lastBusNum: null });
+      await saveRoster(roster);
+      state.roster = roster;
+      nameInput.value = ""; phoneInput.value = ""; emailInput.value = "";
+      renderRosterList();
+      showToast(name + " added \u2014 PIN " + pin);
+    };
+    wrap.appendChild(addBtn);
+
+    const guideImportRow = document.createElement("div");
+    guideImportRow.className = "btn-row"; guideImportRow.style.marginTop = "16px";
+    const importGuidesBtn = document.createElement("button");
+    importGuidesBtn.className = "btn btn-secondary"; importGuidesBtn.textContent = "\u{1F4E5} Import guides from Excel";
+    const templateGuidesBtn = document.createElement("button");
+    templateGuidesBtn.className = "btn btn-ghost"; templateGuidesBtn.textContent = "Download template";
+    templateGuidesBtn.onclick = downloadGuideImportTemplate;
+    const guideFileInput = document.createElement("input");
+    guideFileInput.type = "file"; guideFileInput.accept = ".xlsx,.xls,.csv"; guideFileInput.style.display = "none";
+    guideFileInput.onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      importGuidesBtn.disabled = true; importGuidesBtn.textContent = "Importing\u2026";
+      try { await handleGuideExcelImport(f); renderRosterList(); }
+      catch (err) { console.error(err); showToast("Import failed \u2014 check the file matches the template"); }
+      importGuidesBtn.disabled = false; importGuidesBtn.textContent = "\u{1F4E5} Import guides from Excel";
+    };
+    importGuidesBtn.onclick = () => guideFileInput.click();
+    guideImportRow.appendChild(importGuidesBtn); guideImportRow.appendChild(templateGuidesBtn);
+    wrap.appendChild(guideImportRow); wrap.appendChild(guideFileInput);
+
+    function renderRosterList() {
+      rosterHolder.innerHTML = "";
+      if (!state.roster.length) { rosterHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No guides added yet.</div>`; return; }
+      const card = document.createElement("div"); card.className = "card";
+      state.roster.forEach((g, i) => {
+        if (state.editingGuideIndex === i) {
+          const editWrap = document.createElement("div");
+          editWrap.style.padding = "12px 0";
+          editWrap.style.borderBottom = i < state.roster.length - 1 ? "1px solid var(--border)" : "none";
+          const nEdit = document.createElement("input"); nEdit.type = "text"; nEdit.value = g.name; nEdit.placeholder = "Name"; nEdit.style.marginBottom = "8px";
+          const pEdit = document.createElement("input"); pEdit.type = "text"; pEdit.value = g.phone || ""; pEdit.placeholder = "Phone"; pEdit.style.marginBottom = "8px";
+          const eEdit = document.createElement("input"); eEdit.type = "text"; eEdit.value = g.email || ""; eEdit.placeholder = "Email"; eEdit.style.marginBottom = "10px";
+          const btnRow = document.createElement("div"); btnRow.className = "btn-row"; btnRow.style.marginTop = "0";
+          const saveBtn = document.createElement("button"); saveBtn.className = "btn btn-primary"; saveBtn.textContent = "Save";
+          saveBtn.onclick = async () => {
+            const newName = nEdit.value.trim();
+            if (!newName) { showToast("Name can't be empty"); return; }
+            state.roster[i] = { ...g, name: newName, phone: pEdit.value.trim(), email: eEdit.value.trim() };
+            await saveRoster(state.roster);
+            state.editingGuideIndex = null;
+            renderRosterList();
+            showToast("Updated " + newName);
+          };
+          const cancelBtn = document.createElement("button"); cancelBtn.className = "btn btn-ghost"; cancelBtn.textContent = "Cancel";
+          cancelBtn.onclick = () => { state.editingGuideIndex = null; renderRosterList(); };
+          btnRow.appendChild(saveBtn); btnRow.appendChild(cancelBtn);
+          [nEdit, pEdit, eEdit, btnRow].forEach(el => editWrap.appendChild(el));
+          card.appendChild(editWrap);
+          return;
+        }
+
+        const row = document.createElement("div"); row.className = "roster-row";
+        const contactBits = [g.phone, g.email].filter(Boolean).join(" \u00b7 ");
+        const infoBtn = document.createElement("button");
+        infoBtn.style.cssText = "background:none; border:none; padding:0; margin:0; text-align:left; cursor:pointer; font:inherit; color:inherit; flex:1;";
+        infoBtn.innerHTML = `<div class="roster-name">${esc(g.name)} <span style="color:var(--text-dim); font-size:11px;">\u270E</span></div>${contactBits ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">${esc(contactBits)}</div>` : `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Tap to add contact info</div>`}`;
+        infoBtn.onclick = () => { state.editingGuideIndex = i; renderRosterList(); };
+        const pin = document.createElement("span"); pin.className = "roster-pin"; pin.textContent = g.pin;
+        const del = document.createElement("button"); del.className = "roster-del"; del.textContent = "\u2715";
+        del.onclick = async () => {
+          if (!confirm("Remove " + g.name + "?")) return;
+          state.roster = state.roster.filter((_, idx) => idx !== i);
+          await saveRoster(state.roster);
+          renderRosterList();
+        };
+        row.appendChild(infoBtn); row.appendChild(pin); row.appendChild(del);
+        card.appendChild(row);
+      });
+      rosterHolder.appendChild(card);
+    }
+    loadRoster().then(r => { state.roster = r; renderRosterList(); });
+
+    const courtesyHeading = document.createElement("h2");
+    courtesyHeading.textContent = "Courtesy Flow access";
+    courtesyHeading.style.marginTop = "28px";
+    wrap.appendChild(courtesyHeading);
+    const courtesySub = document.createElement("p");
+    courtesySub.className = "subtitle";
+    courtesySub.textContent = "One shared PIN for anyone using the standalone Courtesy Flow view \u2014 give this to your reception/courtesy team.";
+    wrap.appendChild(courtesySub);
+    const courtesyPinCard = document.createElement("div");
+    courtesyPinCard.className = "card";
+    wrap.appendChild(courtesyPinCard);
+    async function renderCourtesyPinCard() {
+      const pin = await loadCourtesyPin();
+      courtesyPinCard.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "roster-row"; row.style.borderBottom = "none";
+      row.innerHTML = `<div class="roster-name">Courtesy Flow PIN</div>`;
+      const pinSpan = document.createElement("span");
+      pinSpan.className = "roster-pin"; pinSpan.style.fontSize = "18px";
+      pinSpan.textContent = pin || "Not set";
+      row.appendChild(pinSpan);
+      courtesyPinCard.appendChild(row);
+      const genBtn = document.createElement("button");
+      genBtn.className = "btn btn-secondary"; genBtn.style.marginTop = "10px";
+      genBtn.textContent = pin ? "Generate new PIN" : "Generate PIN";
+      genBtn.onclick = async () => {
+        const newPin = String(Math.floor(1000 + Math.random() * 9000));
+        await saveCourtesyPin(newPin);
+        showToast("Courtesy Flow PIN set to " + newPin);
+        renderCourtesyPinCard();
+      };
+      courtesyPinCard.appendChild(genBtn);
+    }
+    renderCourtesyPinCard();
+
+    const helpdeskHeading = document.createElement("h2");
+    helpdeskHeading.textContent = "Help Desk access";
+    helpdeskHeading.style.marginTop = "28px";
+    wrap.appendChild(helpdeskHeading);
+    const helpdeskSub = document.createElement("p");
+    helpdeskSub.className = "subtitle";
+    helpdeskSub.textContent = "One shared PIN for the Help Desk view \u2014 passenger, guide, and Run ID lookup. Give this to your help desk team.";
+    wrap.appendChild(helpdeskSub);
+    const helpdeskPinCard = document.createElement("div");
+    helpdeskPinCard.className = "card";
+    wrap.appendChild(helpdeskPinCard);
+    async function renderHelpdeskPinCard() {
+      const pin = await loadHelpdeskPin();
+      helpdeskPinCard.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "roster-row"; row.style.borderBottom = "none";
+      row.innerHTML = `<div class="roster-name">Help Desk PIN</div>`;
+      const pinSpan = document.createElement("span");
+      pinSpan.className = "roster-pin"; pinSpan.style.fontSize = "18px";
+      pinSpan.textContent = pin || "Not set";
+      row.appendChild(pinSpan);
+      helpdeskPinCard.appendChild(row);
+      const genBtn = document.createElement("button");
+      genBtn.className = "btn btn-secondary"; genBtn.style.marginTop = "10px";
+      genBtn.textContent = pin ? "Generate new PIN" : "Generate PIN";
+      genBtn.onclick = async () => {
+        const newPin = String(Math.floor(1000 + Math.random() * 9000));
+        await saveHelpdeskPin(newPin);
+        showToast("Help Desk PIN set to " + newPin);
+        renderHelpdeskPinCard();
+      };
+      helpdeskPinCard.appendChild(genBtn);
+    }
+    renderHelpdeskPinCard();
+
+    const sheetHeading = document.createElement("h2");
+    sheetHeading.textContent = "Google Sheet live sync";
+    sheetHeading.style.marginTop = "28px";
+    wrap.appendChild(sheetHeading);
+    const sheetBanner = document.createElement("div");
+    sheetBanner.className = "banner";
+    sheetBanner.textContent = "One-time setup: paste the code below into a Google Apps Script bound to your sheet, deploy it as a web app, then paste the resulting URL here.";
+    wrap.appendChild(sheetBanner);
+
+    const codeBox = document.createElement("div");
+    codeBox.className = "code-box";
+    const appsScript = `function doPost(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Live Status');
+  if (!sheet) {
+    sheet = ss.insertSheet('Live Status');
+    var headers = ['Run ID','Status','Origin','Destination','Bus Company','Catering','Boarded','Total','Last Updated'];
+    for (var i=1;i<=8;i++){
+      headers.push('Bus '+i+' Guide','Bus '+i+' Status','Bus '+i+' Pax','Bus '+i+' ETA');
+    }
+    sheet.appendRow(headers);
+  }
+  var data = JSON.parse(e.postData.contents);
+  var row = [data.runId, data.status, data.origin||'', data.destination||'', data.busCompany||'', data.catering||'', data.boarded, data.total, new Date()];
+  for (var i=0;i<8;i++){
+    var b = data.buses[i];
+    row.push(b ? b.guideName : '', b ? b.status : '', b ? b.pax : '', b ? b.eta : '');
+  }
+  var values = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var r=1;r<values.length;r++){
+    if (values[r][0] === data.runId){ rowIndex = r+1; break; }
+  }
+  if (rowIndex === -1) sheet.appendRow(row);
+  else sheet.getRange(rowIndex,1,1,row.length).setValues([row]);
+  return ContentService.createTextOutput(JSON.stringify({ok:true}))
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
+    codeBox.textContent = appsScript;
+    wrap.appendChild(codeBox);
+    const copyCodeBtn = document.createElement("button");
+    copyCodeBtn.className = "btn btn-secondary"; copyCodeBtn.style.marginTop = "10px"; copyCodeBtn.textContent = "Copy Apps Script code";
+    copyCodeBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(appsScript); showToast("Copied"); }
+      catch (e) { showToast("Copy not available \u2014 select manually"); }
+    };
+    wrap.appendChild(copyCodeBtn);
+
+    const urlLabel = document.createElement("label"); urlLabel.textContent = "Web app URL"; urlLabel.style.marginTop = "18px";
+    const urlInput = document.createElement("input");
+    urlInput.type = "text"; urlInput.placeholder = "https://script.google.com/macros/s/.../exec";
+    wrap.appendChild(urlLabel); wrap.appendChild(urlInput);
+    loadWebhookUrl().then(u => { urlInput.value = u || ""; });
+    const saveUrlBtn = document.createElement("button");
+    saveUrlBtn.className = "btn btn-primary"; saveUrlBtn.style.marginTop = "10px"; saveUrlBtn.textContent = "Save sheet connection";
+    saveUrlBtn.onclick = async () => { await saveWebhookUrl(urlInput.value.trim()); showToast("Saved \u2014 updates will now sync to your sheet"); };
+    wrap.appendChild(saveUrlBtn);
+
+    return wrap;
+  }
+
+  async function downloadImportTemplate() {
+    const runsData = [
+      ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company", "Catering (Yes/No)", "Catering Details", "Notes"],
+      ["RUN-001", "JFK arrivals to Marriott Marquis", "JFK Airport", "Marriott Marquis", "JFK Cell Phone Lot", 2, "Academy Express", "Yes", "2x breakfast boxes, bottled water", "VIP group \u2014 coordinate with hotel bell desk"],
+    ];
+    const manifestData = [
+      ["Run ID", "Passenger Name"],
+      ["RUN-001", "Jane Rider"],
+      ["RUN-001", "John Traveler"],
+      ["RUN-001", "Alex Guest"],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(runsData), "Runs");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(manifestData), "Manifest");
+    XLSX.writeFile(wb, "bus_run_import_template.xlsx");
+  }
+
+  async function handleExcelImport(file) {
+    const buf = await file.arrayBuffer();
+    const workbook = XLSX.read(buf, { type: "array" });
+    const runsSheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "runs");
+    const manifestSheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "manifest");
+    if (!runsSheetName) { showToast('No "Runs" tab found \u2014 check against the template'); return; }
+
+    const runsRows = XLSX.utils.sheet_to_json(workbook.Sheets[runsSheetName], { defval: "" });
+    const manifestRows = manifestSheetName ? XLSX.utils.sheet_to_json(workbook.Sheets[manifestSheetName], { defval: "" }) : [];
+
+    const manifestByRun = {};
+    manifestRows.forEach(row => {
+      const rid = String(row["Run ID"] || "").trim();
+      const name = String(row["Passenger Name"] || row["Name"] || "").trim();
+      if (!rid || !name) return;
+      if (!manifestByRun[rid]) manifestByRun[rid] = [];
+      manifestByRun[rid].push(name);
+    });
+
+    let created = 0, skipped = 0;
+    for (const row of runsRows) {
+      const runId = String(row["Run ID"] || "").trim();
+      if (!runId) continue;
+      if (state.runIndex.some(r => r.runId === runId)) { skipped++; continue; }
+      const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
+      const names = manifestByRun[runId] || [];
+      const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
+      const buses = Array.from({ length: numBuses }, (_, i) => ({
+        num: i + 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null, completedAt: null,
+        eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
+        guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+      }));
+      const cateringVal = String(row["Catering (Yes/No)"] || row["Catering"] || "").trim().toLowerCase();
+      const companyRaw = String(row["Bus Company"] || "").trim();
+      const companyMatch = BUS_COMPANIES.find(c => c.toLowerCase() === companyRaw.toLowerCase());
+      const run = {
+        runId, description: String(row["Description"] || "").trim(),
+        origin: String(row["Origin"] || "").trim(), destination: String(row["Destination"] || "").trim(),
+        stagingLocation: String(row["Staging Location"] || "").trim(),
+        busCompany: companyMatch || companyRaw,
+        catering: ["yes", "y", "true"].includes(cateringVal),
+        cateringDetails: String(row["Catering Details"] || "").trim(),
+        notes: String(row["Notes"] || "").trim(),
+        numBuses, buses, manifest, createdAt: Date.now(),
+      };
+      await saveRun(run);
+      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt });
+      created++;
+    }
+    await setJSON("run-index", state.runIndex);
+    showToast(created + " run(s) imported" + (skipped ? ", " + skipped + " skipped (duplicate ID)" : ""));
+    state.coordTab = "dashboard";
+    go("coord-home");
+  }
+
+  async function downloadGuideImportTemplate() {
+    const data = [
+      ["Name", "Phone", "Email", "PIN (optional)"],
+      ["Jane Doe", "(555) 010-1234", "jane.doe@example.com", ""],
+      ["John Smith", "(555) 010-5678", "john.smith@example.com", "4471"],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), "Guides");
+    XLSX.writeFile(wb, "bus_guide_import_template.xlsx");
+  }
+
+  async function handleGuideExcelImport(file) {
+    const buf = await file.arrayBuffer();
+    const workbook = XLSX.read(buf, { type: "array" });
+    const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "guides") || workbook.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+
+    const roster = await loadRoster();
+    let added = 0, updated = 0;
+    rows.forEach(row => {
+      const name = String(row["Name"] || "").trim();
+      if (!name) return;
+      const phone = String(row["Phone"] || "").trim();
+      const email = String(row["Email"] || "").trim();
+      let pin = String(row["PIN (optional)"] || row["PIN"] || "").trim();
+      if (pin && !/^\d{4}$/.test(pin)) pin = "";
+      if (pin && roster.some(g => g.pin === pin)) pin = "";
+      const existingIdx = roster.findIndex(g => g.name.toLowerCase() === name.toLowerCase());
+      if (existingIdx >= 0) {
+        roster[existingIdx].phone = phone;
+        roster[existingIdx].email = email;
+        if (pin) roster[existingIdx].pin = pin;
+        updated++;
+      } else {
+        if (!pin) pin = genPin(roster);
+        roster.push({ name, phone, email, pin, lastRunId: null, lastBusNum: null });
+        added++;
+      }
+    });
+    await saveRoster(roster);
+    state.roster = roster;
+    showToast(added + " guide(s) added" + (updated ? ", " + updated + " updated" : ""));
+  }
+
+  // ---------- Coordinator: create run ----------
+  function renderCoordCreate() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("New run", () => go("coord-home")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Set up a new run</h2><p class="subtitle">This creates the run and manifest that bus guides will see when they select it. Setting up several runs at once? Go back and use <b style="color:var(--text)">Import from Excel</b> instead.</p>`;
+    const nextNum = (state.runIndex.length + 1).toString().padStart(3, "0");
+
+    const runIdLabel = document.createElement("label"); runIdLabel.textContent = "Run ID";
+    const runIdInput = document.createElement("input"); runIdInput.type = "text"; runIdInput.value = "RUN-" + nextNum;
+    const descLabel = document.createElement("label"); descLabel.textContent = "Description";
+    const descInput = document.createElement("input"); descInput.type = "text"; descInput.placeholder = "e.g. JFK arrivals \u2192 Marriott Marquis";
+    const originLabel = document.createElement("label"); originLabel.textContent = "Origin";
+    const originInput = document.createElement("input"); originInput.type = "text"; originInput.placeholder = "e.g. JFK Airport";
+    const destLabel = document.createElement("label"); destLabel.textContent = "Destination";
+    const destInput = document.createElement("input"); destInput.type = "text"; destInput.placeholder = "e.g. Marriott Marquis";
+    const stageLabel = document.createElement("label"); stageLabel.textContent = "Staging location";
+    const stageInput = document.createElement("input"); stageInput.type = "text"; stageInput.placeholder = "e.g. JFK Cell Phone Lot";
+    const busLabel = document.createElement("label"); busLabel.textContent = "Number of buses";
+    const busInput = document.createElement("input"); busInput.type = "number"; busInput.min = "1"; busInput.max = "8"; busInput.value = "2";
+    const companyLabel = document.createElement("label"); companyLabel.textContent = "Bus company";
+    const companySelect = document.createElement("select");
+    const companyBlankOpt = document.createElement("option");
+    companyBlankOpt.value = ""; companyBlankOpt.textContent = "\u2014 Select bus company \u2014";
+    companySelect.appendChild(companyBlankOpt);
+    BUS_COMPANIES.forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name; opt.textContent = name;
+      companySelect.appendChild(opt);
+    });
+
+    const cateringRow = document.createElement("div");
+    cateringRow.className = "checkbox-row";
+    const cateringCheck = document.createElement("input"); cateringCheck.type = "checkbox"; cateringCheck.id = "catering-check";
+    const cateringLbl = document.createElement("label"); cateringLbl.className = "cr-label"; cateringLbl.setAttribute("for","catering-check"); cateringLbl.textContent = "This run has catering to load";
+    cateringLbl.style.margin = "0";
+    cateringRow.appendChild(cateringCheck); cateringRow.appendChild(cateringLbl);
+
+    const cateringDetailsLabel = document.createElement("label"); cateringDetailsLabel.textContent = "Catering details";
+    const cateringDetailsInput = document.createElement("textarea"); cateringDetailsInput.placeholder = "e.g. 2x continental breakfast boxes, bottled water";
+    cateringDetailsLabel.style.display = "none"; cateringDetailsInput.style.display = "none";
+    cateringCheck.onchange = () => {
+      cateringDetailsLabel.style.display = cateringCheck.checked ? "block" : "none";
+      cateringDetailsInput.style.display = cateringCheck.checked ? "block" : "none";
+    };
+
+    const notesLabel = document.createElement("label"); notesLabel.textContent = "Announcements / route notes";
+    const notesInput = document.createElement("textarea"); notesInput.placeholder = "Anything the guide should know or announce on the bus";
+
+    const manifestLabel = document.createElement("label"); manifestLabel.textContent = "Passenger manifest \u2014 one name per line";
+    const manifestArea = document.createElement("textarea"); manifestArea.placeholder = "Jane Rider\nJohn Traveler\nAlex Guest\n\u2026";
+
+    [runIdLabel, runIdInput, descLabel, descInput, originLabel, originInput, destLabel, destInput,
+     stageLabel, stageInput, busLabel, busInput, companyLabel, companySelect, cateringRow, cateringDetailsLabel, cateringDetailsInput,
+     notesLabel, notesInput, manifestLabel, manifestArea].forEach(el => screen.appendChild(el));
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "btn-row";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "btn btn-ghost"; cancelBtn.textContent = "Cancel"; cancelBtn.onclick = () => go("coord-home");
+    const createBtn = document.createElement("button");
+    createBtn.className = "btn btn-primary"; createBtn.textContent = "Create run";
+    createBtn.onclick = async () => {
+      const runId = runIdInput.value.trim();
+      if (!runId) { showToast("Enter a Run ID"); return; }
+      if (state.runIndex.some(r => r.runId === runId)) { showToast("That Run ID already exists"); return; }
+      const numBuses = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
+      const names = manifestArea.value.split("\n").map(n => n.trim()).filter(Boolean);
+      const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
+      const buses = Array.from({ length: numBuses }, (_, i) => ({
+        num: i + 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null, completedAt: null,
+        eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
+        guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+      }));
+      const run = {
+        runId, description: descInput.value.trim(), origin: originInput.value.trim(), destination: destInput.value.trim(),
+        stagingLocation: stageInput.value.trim(), busCompany: companySelect.value, catering: cateringCheck.checked, cateringDetails: cateringDetailsInput.value.trim(),
+        notes: notesInput.value.trim(), numBuses, buses, manifest, createdAt: Date.now(),
+      };
+      createBtn.disabled = true; createBtn.textContent = "Creating\u2026";
+      await saveRun(run);
+      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt });
+      await setJSON("run-index", state.runIndex);
+      showToast("Run " + runId + " created");
+      state.coordTab = "dashboard";
+      go("coord-home");
+    };
+    btnRow.appendChild(cancelBtn); btnRow.appendChild(createBtn);
+    screen.appendChild(btnRow);
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Coordinator: run detail + export + map ----------
+  function renderCoordRunDetail() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId, () => { destroyMap(); go("coord-home"); }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2>`;
+
+    const routeCard = document.createElement("div");
+    routeCard.className = "card";
+    routeCard.innerHTML = `<div class="overview-row" style="padding-top:0;">
+        <div class="overview-label">Route</div>
+        <div class="overview-value">${esc(run.origin || "\u2014")} <span class="route-arrow">\u2192</span> ${esc(run.destination || "\u2014")}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">Bus company</div>
+        <div class="overview-value">${run.busCompany ? esc(run.busCompany) : "\u2014 not set"}</div>
+      </div>
+      <div class="overview-row" style="border-bottom:none; padding-bottom:0;">
+        <div class="overview-label">Catering</div>
+        <div class="overview-value">${run.catering ? "Yes" : "No"}</div>
+      </div>`;
+    screen.appendChild(routeCard);
+
+    const statsHolder = document.createElement("div");
+    screen.appendChild(statsHolder);
+    const busCardHolder = document.createElement("div");
+    screen.appendChild(busCardHolder);
+
+    const mapLabel = document.createElement("h3"); mapLabel.textContent = "Live bus locations";
+    screen.appendChild(mapLabel);
+    const mapDiv = document.createElement("div"); mapDiv.id = "live-map";
+    screen.appendChild(mapDiv);
+    const mapNote = document.createElement("p");
+    mapNote.className = "subtitle"; mapNote.style.fontSize = "12px";
+    mapNote.textContent = "Markers appear once a guide's bus goes In Route and their phone shares a location.";
+    screen.appendChild(mapNote);
+
+    const refreshBtn = document.createElement("button");
+    refreshBtn.className = "btn btn-secondary"; refreshBtn.style.marginBottom = "16px"; refreshBtn.textContent = "Refresh now";
+    refreshBtn.onclick = async () => { state.currentRun = await loadRun(run.runId); updateLiveParts(); };
+    screen.appendChild(refreshBtn);
+
+    const exportHeading = document.createElement("h2"); exportHeading.textContent = "Export to Master Tracker"; exportHeading.style.marginTop = "12px";
+    screen.appendChild(exportHeading);
+    const exportNote = document.createElement("p");
+    exportNote.className = "subtitle"; exportNote.style.marginBottom = "10px";
+    exportNote.textContent = "Column headers match your Excel Master Tracker tab \u2014 paste this row's values into the matching columns for this Run ID.";
+    screen.appendChild(exportNote);
+
+    const csvHolder = document.createElement("div");
+    screen.appendChild(csvHolder);
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "btn btn-secondary"; copyBtn.style.marginTop = "10px"; copyBtn.textContent = "Copy row for pasting into Excel";
+    copyBtn.onclick = async () => {
+      const r = buildExportRow(state.currentRun);
+      try { await navigator.clipboard.writeText(r.row.join("\t")); showToast("Copied \u2014 paste into Excel"); }
+      catch (e) { showToast("Copy not available \u2014 select text manually"); }
+    };
+    screen.appendChild(copyBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "btn btn-danger"; deleteBtn.style.marginTop = "24px"; deleteBtn.textContent = "Delete this run";
+    deleteBtn.onclick = async () => {
+      if (!confirm("Delete " + run.runId + "? This can't be undone.")) return;
+      state.runIndex = state.runIndex.filter(r => r.runId !== run.runId);
+      await setJSON("run-index", state.runIndex);
+      await deleteKey("run-" + run.runId);
+      destroyMap(); go("coord-home");
+    };
+    screen.appendChild(deleteBtn);
+    c.appendChild(screen);
+
+    function buildExportRow(r) {
+      const headers = ["Run ID", "Status", "Origin", "Destination", "Bus Company", "Catering (Y/N)"];
+      for (let i = 1; i <= r.numBuses; i++) headers.push("Bus Guide " + i);
+      for (let i = 1; i <= r.numBuses; i++) headers.push("Passengers - Bus " + i);
+      headers.push("Total Passengers");
+      const row = [r.runId, aggregateStatus(r), r.origin || "", r.destination || "", r.busCompany || "", r.catering ? "Yes" : "No"];
+      for (let i = 1; i <= r.numBuses; i++) row.push(r.buses.find(b => b.num === i).guideName || "");
+      for (let i = 1; i <= r.numBuses; i++) row.push(String(busBoardedCount(r, i)));
+      row.push(String(totalBoarded(r)));
+      return { headers, row };
+    }
+
+    function updateLiveParts() {
+      const r = state.currentRun;
+      const boarded = totalBoarded(r);
+      const total = r.manifest.length;
+      statsHolder.innerHTML = `<div class="stat-strip">
+          <div class="stat-box"><div class="num">${boarded}</div><div class="lbl">Boarded</div></div>
+          <div class="stat-box"><div class="num">${total}</div><div class="lbl">Manifest</div></div>
+          <div class="stat-box"><div class="num">${total - boarded}</div><div class="lbl">Remaining</div></div>
+        </div>`;
+      busCardHolder.innerHTML = "";
+      const busCard = document.createElement("div"); busCard.className = "card";
+      r.buses.forEach(b => {
+        const cnt = busBoardedCount(r, b.num);
+        const etaText = b.eta ? new Date(b.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " (upd " + timeAgo(b.etaUpdatedAt) + ")" : "\u2014";
+        const cateringText = r.catering ? (b.cateringLoaded ? "Catering loaded" : "Catering not loaded yet") : "";
+        const checklist = getChecklistItems(r);
+        const checklistDone = checklist.filter(it => b[it.key]).length;
+        const checklistComplete = checklistDone === checklist.length;
+        const rowBtn = document.createElement("button");
+        rowBtn.className = "list-btn bus-detail-row";
+        rowBtn.innerHTML = `<div class="bus-detail-left"><div class="bus-detail-num">B${b.num}</div>
+            <div><span class="status-pill ${STATUS_CLASS(b.status)}"><span class="sdot"></span>${b.status}</span>
+            <span class="status-pill" style="margin-left:6px; background:${checklistComplete ? "var(--green-dim)" : "var(--panel-alt)"}; color:${checklistComplete ? "var(--green)" : "var(--text-dim)"};"><span class="sdot" style="background:${checklistComplete ? "var(--green)" : "var(--text-dim)"};"></span>Checklist ${checklistDone}/${checklist.length}</span>
+            <div class="bus-detail-meta">${b.guideName ? esc(b.guideName) : "No guide checked in yet"} \u00b7 ETA ${etaText}${cateringText ? " \u00b7 " + cateringText : ""}</div></div></div>
+          <div class="bus-detail-count">${cnt} pax <span class="chev">\u203A</span></div>`;
+        rowBtn.onclick = () => { stopPolling(); destroyMap(); state.currentBusNum = b.num; go("coord-bus-detail"); };
+        busCard.appendChild(rowBtn);
+      });
+      busCardHolder.appendChild(busCard);
+      const { headers, row } = buildExportRow(r);
+      csvHolder.innerHTML = "";
+      const csvBox = document.createElement("div"); csvBox.className = "csv-box";
+      csvBox.textContent = headers.join("\t") + "\n" + row.join("\t");
+      csvHolder.appendChild(csvBox);
+      updateMap(r);
+    }
+    updateLiveParts();
+    startPolling(async () => {
+      if (state.view !== "coord-run-detail") return;
+      const fresh = await loadRun(run.runId);
+      if (fresh) { state.currentRun = fresh; updateLiveParts(); }
+    }, 5000);
+    return c;
+  }
+
+  // ---------- Coordinator: single-bus detail (contact + passenger list) ----------
+  function renderCoordBusDetail() {
+    const run = state.currentRun;
+    const busNum = state.currentBusNum;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Bus " + busNum, () => {
+      go("coord-run-detail");
+      startPolling(async () => {
+        if (state.view !== "coord-run-detail") return;
+        const fresh = await loadRun(run.runId);
+        if (fresh) { state.currentRun = fresh; }
+      }, 5000);
+    }));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    const bodyHolder = document.createElement("div");
+    screen.appendChild(bodyHolder);
+    c.appendChild(screen);
+
+    async function renderBody() {
+      const bus = state.currentRun.buses.find(b => b.num === busNum);
+      const roster = await loadRoster();
+      const guide = bus.guideName ? roster.find(g => g.name === bus.guideName) : null;
+      const riders = state.currentRun.manifest.filter(p => p.boarded && p.busNum === busNum);
+
+      bodyHolder.innerHTML = "";
+      const statusRow = document.createElement("div");
+      statusRow.style.marginBottom = "14px";
+      statusRow.innerHTML = `<span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
+      bodyHolder.appendChild(statusRow);
+
+      const contactCard = document.createElement("div");
+      contactCard.className = "card";
+      if (!bus.guideName) {
+        contactCard.innerHTML = `<div class="empty-state" style="padding:10px 0;">No guide has checked into this bus yet.</div>`;
+      } else {
+        const phone = guide && guide.phone ? guide.phone : "";
+        const email = guide && guide.email ? guide.email : "";
+        contactCard.innerHTML = `
+          <div class="overview-row" style="padding-top:0;">
+            <div class="overview-label">Bus guide</div>
+            <div class="overview-value">${esc(bus.guideName)}</div>
+          </div>
+          <div class="overview-row">
+            <div class="overview-label">Phone</div>
+            <div class="overview-value">${phone ? `<a href="tel:${esc(phone.replace(/[^+\d]/g, ""))}" style="color:var(--brand); text-decoration:none;">\u{1F4DE} ${esc(phone)}</a>` : "\u2014 not on file"}</div>
+          </div>
+          <div class="overview-row" style="border-bottom:none; padding-bottom:0;">
+            <div class="overview-label">Email</div>
+            <div class="overview-value">${email ? `<a href="mailto:${esc(email)}" style="color:var(--brand); text-decoration:none;">\u2709\uFE0F ${esc(email)}</a>` : "\u2014 not on file"}</div>
+          </div>`;
+      }
+      bodyHolder.appendChild(contactCard);
+
+      const checklistHeading = document.createElement("h3");
+      checklistHeading.textContent = "Pre-run checklist";
+      bodyHolder.appendChild(checklistHeading);
+      const checklistCard = document.createElement("div");
+      checklistCard.className = "card";
+      const coordChecklistItems = getChecklistItems(run);
+      coordChecklistItems.forEach((item, i) => {
+        const done = !!bus[item.key];
+        const row = document.createElement("div");
+        row.className = "bus-detail-row";
+        if (i === coordChecklistItems.length - 1) row.style.borderBottom = "none";
+        row.innerHTML = `<div class="bus-detail-left"><div class="checkbox" style="${done ? 'background:var(--green); border-color:var(--green); color:#08201a;' : ''}">${done ? "\u2713" : ""}</div>
+            <span style="font-size:13.5px; color:${done ? "var(--text)" : "var(--text-dim)"};">${esc(item.short)}</span></div>
+          <span style="font-size:11px; color:var(--text-dim); font-family:var(--mono);">${done ? timeAgo(bus[item.key + "At"]) : "pending"}</span>`;
+        checklistCard.appendChild(row);
+      });
+      bodyHolder.appendChild(checklistCard);
+
+      const reassignCard = document.createElement("div");
+      reassignCard.className = "card";
+      const reassignLabel = document.createElement("label");
+      reassignLabel.textContent = "Reassign this bus";
+      reassignLabel.style.margin = "0 0 6px";
+      reassignCard.appendChild(reassignLabel);
+      const select = document.createElement("select");
+      const noneOpt = document.createElement("option");
+      noneOpt.value = ""; noneOpt.textContent = "\u2014 No guide assigned \u2014";
+      select.appendChild(noneOpt);
+      roster.forEach(g => {
+        const opt = document.createElement("option");
+        opt.value = g.name; opt.textContent = g.name;
+        if (g.name === bus.guideName) opt.selected = true;
+        select.appendChild(opt);
+      });
+      reassignCard.appendChild(select);
+      const reassignBtn = document.createElement("button");
+      reassignBtn.className = "btn btn-secondary"; reassignBtn.style.marginTop = "10px"; reassignBtn.textContent = "Save reassignment";
+      reassignBtn.onclick = async () => {
+        const fresh = await loadRun(run.runId);
+        const freshBus = fresh.buses.find(b => b.num === busNum);
+        const oldGuideName = freshBus.guideName;
+        freshBus.guideName = select.value;
+        await saveRun(fresh);
+        if (oldGuideName && oldGuideName !== select.value) {
+          const rosterList = await loadRoster();
+          const oldGuide = rosterList.find(g => g.name === oldGuideName);
+          if (oldGuide && oldGuide.lastRunId === run.runId && oldGuide.lastBusNum === busNum) {
+            oldGuide.lastRunId = null; oldGuide.lastBusNum = null;
+            await saveRoster(rosterList);
+          }
+        }
+        state.currentRun = fresh;
+        showToast(select.value ? "Bus " + busNum + " reassigned to " + select.value : "Guide removed from Bus " + busNum);
+        renderBody();
+      };
+      reassignCard.appendChild(reassignBtn);
+      bodyHolder.appendChild(reassignCard);
+
+      const ridersHeading = document.createElement("h3");
+      ridersHeading.textContent = "On this bus (" + riders.length + ")";
+      bodyHolder.appendChild(ridersHeading);
+
+      if (!riders.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.innerHTML = `<div class="big">\u{1F6CB}\uFE0F</div>Nobody's boarded this bus yet.`;
+        bodyHolder.appendChild(empty);
+      } else {
+        const list = document.createElement("div");
+        list.className = "pax-list";
+        riders
+          .slice()
+          .sort((a, b) => (a.boardedAt || 0) - (b.boardedAt || 0))
+          .forEach(p => {
+            const row = document.createElement("div");
+            row.className = "pax-row boarded-mine";
+            row.style.cursor = "default";
+            row.innerHTML = `<div class="checkbox">\u2713</div><div class="pax-name">${esc(p.name)}</div>
+              <div class="pax-tag">${p.boardedAt ? timeAgo(p.boardedAt) : ""}</div>`;
+            list.appendChild(row);
+          });
+        bodyHolder.appendChild(list);
+      }
+    }
+    renderBody();
+    startPolling(async () => {
+      if (state.view !== "coord-bus-detail") return;
+      const fresh = await loadRun(run.runId);
+      if (fresh) { state.currentRun = fresh; renderBody(); }
+    }, 5000);
+    return c;
+  }
+
+  function updateMap(run) {
+    if (typeof L === "undefined") return;
+    const withLoc = run.buses.filter(b => b.loc);
+    if (!mapInstance) {
+      const el = document.getElementById("live-map");
+      if (!el) return;
+      mapInstance = L.map(el, { attributionControl: false }).setView([39.5, -98.35], 4);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(mapInstance);
+      mapMarkers = {};
+    }
+    withLoc.forEach(b => {
+      const popupHtml = `<b>Bus ${b.num}</b><br/>${esc(b.guideName || "")}<br/>Updated ${timeAgo(b.loc.at)}`;
+      if (mapMarkers[b.num]) { mapMarkers[b.num].setLatLng([b.loc.lat, b.loc.lng]); mapMarkers[b.num].setPopupContent(popupHtml); }
+      else { mapMarkers[b.num] = L.marker([b.loc.lat, b.loc.lng]).addTo(mapInstance).bindPopup(popupHtml); }
+    });
+    if (withLoc.length) {
+      const bounds = withLoc.map(b => [b.loc.lat, b.loc.lng]);
+      if (bounds.length === 1) mapInstance.setView(bounds[0], 13);
+      else mapInstance.fitBounds(bounds, { padding: [30, 30] });
+    }
+  }
+  function destroyMap() { if (mapInstance) { mapInstance.remove(); mapInstance = null; mapMarkers = {}; } }
+
+  // ---------- Coordinator: settings ----------
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+  }
+
+  function storageBridgeMissing() {
+    return typeof fbDb === "undefined" || !FIREBASE_CONFIG || FIREBASE_CONFIG.apiKey === "PASTE_YOUR_API_KEY_HERE";
+  }
+
+  function renderStorageWarning() {
+    const root = document.getElementById("app-root");
+    root.innerHTML = "";
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.style.paddingTop = "60px";
+    screen.innerHTML = `
+      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--red); text-transform: uppercase; margin-bottom: 14px;">App can't save right now</div>
+      <h1 style="color: var(--red);">Firebase isn't configured yet</h1>
+      <p class="subtitle" style="margin-bottom: 8px;">This app saves data using Firebase, but the FIREBASE_CONFIG block near the top of index.html still has placeholder values.</p>
+      <p class="subtitle" style="margin-bottom: 24px;">Follow Part 1 of the setup guide: create a Firebase project, copy your config, and paste it into index.html in place of the "PASTE_YOUR..." placeholders. Then reload this page.</p>
+      <button class="btn btn-secondary" id="retry-storage-btn">I've updated the config \u2014 try again</button>
+    `;
+    root.appendChild(screen);
+    document.getElementById("retry-storage-btn").onclick = () => {
+      if (storageBridgeMissing()) { renderStorageWarning(); }
+      else { render(); }
+    };
+  }
+
+  if (storageBridgeMissing()) {
+    renderStorageWarning();
+  } else {
+    render();
+  }
+})();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("SW registration failed", e));
+  });
+}
+</script>
