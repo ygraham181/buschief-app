@@ -131,7 +131,7 @@
   .status-stepper .cur-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; font-family: var(--mono); margin-bottom: 8px; }
   .eta-banner { background: var(--brand-dim); border: 1.5px solid var(--brand); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
   .eta-banner .eta-title { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--brand); margin-bottom: 8px; font-weight: 700; }
-  .eta-banner .eta-row { display: flex; gap: 8px; align-items: center; }
+  .eta-banner .eta-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .eta-banner input[type=time] { flex: 1; }
   .eta-current { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; }
   .gps-status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); margin-bottom: 14px; font-family: var(--mono); }
@@ -856,12 +856,40 @@
         banner.innerHTML = `<div class="eta-title">${bus.eta ? "ETA check-in" : "Set your ETA"}</div>`;
         const row = document.createElement("div");
         row.className = "eta-row";
-        const timeInput = document.createElement("input"); timeInput.type = "time";
+
+        // Reliable dropdown-based time picker — native <input type="time"> pickers
+        // are inconsistent (and prone to scroll conflicts) across Android browsers.
+        const timeRow = document.createElement("div");
+        timeRow.style.cssText = "display:flex; gap:6px; align-items:center;";
+        const hourSel = document.createElement("select");
+        hourSel.style.width = "auto";
+        for (let h = 1; h <= 12; h++) { const o = document.createElement("option"); o.value = String(h); o.textContent = String(h); hourSel.appendChild(o); }
+        const colon = document.createElement("span"); colon.textContent = ":"; colon.style.cssText = "color:var(--text-dim); font-family:var(--mono);";
+        const minSel = document.createElement("select");
+        minSel.style.width = "auto";
+        for (let m = 0; m < 60; m += 5) { const o = document.createElement("option"); o.value = String(m); o.textContent = String(m).padStart(2, "0"); minSel.appendChild(o); }
+        const ampmSel = document.createElement("select");
+        ampmSel.style.width = "auto";
+        ["AM", "PM"].forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; ampmSel.appendChild(o); });
+
+        // default to the current time, rounded to the nearest 5 minutes
+        const now = new Date();
+        let defM = Math.round(now.getMinutes() / 5) * 5;
+        let defH = now.getHours();
+        if (defM === 60) { defM = 0; defH = (defH + 1) % 24; }
+        const defAmpm = defH >= 12 ? "PM" : "AM";
+        let def12 = defH % 12; if (def12 === 0) def12 = 12;
+        hourSel.value = String(def12); minSel.value = String(defM); ampmSel.value = defAmpm;
+
+        timeRow.appendChild(hourSel); timeRow.appendChild(colon); timeRow.appendChild(minSel); timeRow.appendChild(ampmSel);
+
         const submitBtn = document.createElement("button");
         submitBtn.className = "btn btn-primary"; submitBtn.style.width = "auto"; submitBtn.textContent = "Update ETA";
         submitBtn.onclick = async () => {
-          if (!timeInput.value) { showToast("Pick a time"); return; }
-          const [hh, mm] = timeInput.value.split(":").map(Number);
+          let hh = parseInt(hourSel.value, 10);
+          const mm = parseInt(minSel.value, 10);
+          if (ampmSel.value === "PM" && hh !== 12) hh += 12;
+          if (ampmSel.value === "AM" && hh === 12) hh = 0;
           const d = new Date(); d.setHours(hh, mm, 0, 0);
           const fresh = await loadRun(run.runId);
           const b = fresh.buses.find(b2 => b2.num === busNum);
@@ -872,7 +900,7 @@
           renderEtaBanner();
           showToast("ETA updated");
         };
-        row.appendChild(timeInput); row.appendChild(submitBtn);
+        row.appendChild(timeRow); row.appendChild(submitBtn);
         banner.appendChild(row);
         if (bus.eta) {
           const cur = document.createElement("div"); cur.className = "eta-current";
