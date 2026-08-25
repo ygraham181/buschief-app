@@ -326,6 +326,14 @@
     let pin; do { pin = String(Math.floor(1000 + Math.random() * 9000)); } while (existing.some(g => g.pin === pin));
     return pin;
   }
+  function computeAssignedGuides(buses) {
+    return Array.from(new Set(buses.map(b => b.guideName).filter(Boolean)));
+  }
+  async function updateRunIndexEntry(runId, patch) {
+    const idx = await getJSON("run-index", []);
+    const i = idx.findIndex(r => r.runId === runId);
+    if (i >= 0) { idx[i] = { ...idx[i], ...patch }; await setJSON("run-index", idx); state.runIndex = idx; }
+  }
   function timeAgo(ts) {
     if (!ts) return "never";
     const s = Math.floor((Date.now() - ts) / 1000);
@@ -459,14 +467,15 @@
     c.appendChild(topbar(state.guideName, () => { teardownGuideSession(); go("role-select"); }));
     const screen = document.createElement("div");
     screen.className = "screen";
-    screen.innerHTML = `<h2>Select your run</h2><p class="subtitle" style="margin-bottom:16px;">Signed in as <b style="color:var(--text)">${esc(state.guideName)}</b>. Tap the run you're working today.</p>`;
-    if (!state.runIndex.length) {
+    screen.innerHTML = `<h2>Your runs</h2><p class="subtitle" style="margin-bottom:16px;">Signed in as <b style="color:var(--text)">${esc(state.guideName)}</b>. Only runs your coordinator has assigned to you show up here.</p>`;
+    const myRuns = state.runIndex.filter(r => r.assignedGuides && r.assignedGuides.includes(state.guideName));
+    if (!myRuns.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.innerHTML = `<div class="big">\u{1F68C}</div>No runs have been set up yet.<br/>Ask your coordinator to create one.`;
+      empty.innerHTML = `<div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.`;
       screen.appendChild(empty);
     } else {
-      state.runIndex.slice().sort((a,b) => a.runId.localeCompare(b.runId)).forEach(r => {
+      myRuns.slice().sort((a,b) => a.runId.localeCompare(b.runId)).forEach(r => {
         const card = document.createElement("div");
         card.className = "card";
         const btn = document.createElement("button");
@@ -571,14 +580,29 @@
     c.appendChild(topbar(run.runId, () => go("guide-route-fork")));
     const screen = document.createElement("div");
     screen.className = "screen";
-    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2><p class="subtitle">Which bus are you on, ${esc(state.guideName)}?</p>`;
+    const myBuses = run.buses.filter(b => b.guideName === state.guideName);
+
+    if (!myBuses.length) {
+      screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2>`;
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.innerHTML = `<div class="big">\u26a0\ufe0f</div>You're not currently assigned to a bus on this run.<br/>Check with your coordinator.`;
+      screen.appendChild(empty);
+      c.appendChild(screen);
+      return c;
+    }
+
+    // auto-select if this guide only has one bus on this run
+    if (myBuses.length === 1) state.guideBus = myBuses[0].num;
+
+    screen.innerHTML = `<h2>${esc(run.description || run.runId)}</h2><p class="subtitle">${myBuses.length > 1 ? "You're assigned to more than one bus on this run \u2014 pick which one:" : "You're assigned to:"}</p>`;
     const busGrid = document.createElement("div");
     busGrid.className = "bus-grid";
-    run.buses.forEach(b => {
+    myBuses.forEach(b => {
       const tile = document.createElement("div");
       tile.className = "bus-tile";
       if (state.guideBus === b.num) tile.style.borderColor = "var(--brand)";
-      tile.innerHTML = `<div class="blabel">Bus</div><div class="bnum">${b.num}</div><div class="bguide">${b.guideName ? esc(b.guideName) : ""}</div>`;
+      tile.innerHTML = `<div class="blabel">Bus</div><div class="bnum">${b.num}</div><div class="bguide">${esc(b.guideName)}</div>`;
       tile.onclick = () => { state.guideBus = b.num; render(); };
       busGrid.appendChild(tile);
     });
@@ -587,12 +611,8 @@
     continueBtn.className = "btn btn-primary"; continueBtn.style.marginTop = "22px"; continueBtn.textContent = "Continue";
     continueBtn.onclick = async () => {
       if (state.guideBus === null) { showToast("Select a bus first"); return; }
-      const fresh = await loadRun(run.runId);
-      const bus = fresh.buses.find(b => b.num === state.guideBus);
-      bus.guideName = state.guideName;
-      await saveRun(fresh);
       await setGuideResume(state.guidePin, run.runId, state.guideBus);
-      state.currentRun = fresh;
+      state.currentRun = await loadRun(run.runId);
       go("guide-manifest");
       startPolling(async () => {
         if (state.view !== "guide-manifest") return;
@@ -1044,7 +1064,7 @@
     }
 
     refresh();
-    startPolling(refresh, 5000);
+    startPolling(refresh, 10000);
     return c;
   }
 
@@ -1359,7 +1379,7 @@
       holder.appendChild(buildCourtesyContent(runs));
     }
     refresh();
-    startPolling(refresh, 5000);
+    startPolling(refresh, 10000);
     return c;
   }
 
@@ -1453,7 +1473,7 @@
       else contentHolder.appendChild(buildHelpdeskSearchTab(runs, roster));
     }
     refresh();
-    startPolling(refresh, 5000);
+    startPolling(refresh, 10000);
     return c;
   }
 
@@ -1857,8 +1877,12 @@
 
   async function downloadImportTemplate() {
     const runsData = [
-      ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company", "Catering (Yes/No)", "Catering Details", "Notes"],
-      ["RUN-001", "JFK arrivals to Marriott Marquis", "JFK Airport", "Marriott Marquis", "JFK Cell Phone Lot", 2, "Academy Express", "Yes", "2x breakfast boxes, bottled water", "VIP group \u2014 coordinate with hotel bell desk"],
+      ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company",
+       "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
+       "Catering (Yes/No)", "Catering Details", "Notes"],
+      ["RUN-001", "JFK arrivals to Marriott Marquis", "JFK Airport", "Marriott Marquis", "JFK Cell Phone Lot", 2, "Academy Express",
+       "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
+       "Yes", "2x breakfast boxes, bottled water", "VIP group \u2014 coordinate with hotel bell desk"],
     ];
     const manifestData = [
       ["Run ID", "Passenger Name"],
@@ -1881,6 +1905,7 @@
 
     const runsRows = XLSX.utils.sheet_to_json(workbook.Sheets[runsSheetName], { defval: "" });
     const manifestRows = manifestSheetName ? XLSX.utils.sheet_to_json(workbook.Sheets[manifestSheetName], { defval: "" }) : [];
+    const roster = await loadRoster();
 
     const manifestByRun = {};
     manifestRows.forEach(row => {
@@ -1891,7 +1916,7 @@
       manifestByRun[rid].push(name);
     });
 
-    let created = 0, skipped = 0;
+    let created = 0, skipped = 0, unmatchedGuides = new Set();
     for (const row of runsRows) {
       const runId = String(row["Run ID"] || "").trim();
       if (!runId) continue;
@@ -1899,11 +1924,20 @@
       const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
       const names = manifestByRun[runId] || [];
       const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
-      const buses = Array.from({ length: numBuses }, (_, i) => ({
-        num: i + 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null, completedAt: null,
-        eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
-        guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
-      }));
+      const buses = Array.from({ length: numBuses }, (_, i) => {
+        const raw = String(row["Bus " + (i + 1) + " Guide"] || "").trim();
+        let guideName = "";
+        if (raw) {
+          const match = roster.find(g => g.name.toLowerCase() === raw.toLowerCase());
+          if (match) guideName = match.name;
+          else unmatchedGuides.add(raw);
+        }
+        return {
+          num: i + 1, status: "Not Started", guideName, stagingAt: null, departedAt: null, completedAt: null,
+          eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
+          guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+        };
+      });
       const cateringVal = String(row["Catering (Yes/No)"] || row["Catering"] || "").trim().toLowerCase();
       const companyRaw = String(row["Bus Company"] || "").trim();
       const companyMatch = BUS_COMPANIES.find(c => c.toLowerCase() === companyRaw.toLowerCase());
@@ -1918,11 +1952,15 @@
         numBuses, buses, manifest, createdAt: Date.now(),
       };
       await saveRun(run);
-      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt });
+      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
       created++;
     }
     await setJSON("run-index", state.runIndex);
-    showToast(created + " run(s) imported" + (skipped ? ", " + skipped + " skipped (duplicate ID)" : ""));
+    showToast(
+      created + " run(s) imported" +
+      (skipped ? ", " + skipped + " skipped (duplicate ID)" : "") +
+      (unmatchedGuides.size ? ", " + unmatchedGuides.size + " guide name(s) not found in roster" : "")
+    );
     state.coordTab = "dashboard";
     go("coord-home");
   }
@@ -2003,6 +2041,61 @@
       companySelect.appendChild(opt);
     });
 
+    [runIdLabel, runIdInput, descLabel, descInput, originLabel, originInput, destLabel, destInput,
+     stageLabel, stageInput, busLabel, busInput, companyLabel, companySelect].forEach(el => screen.appendChild(el));
+
+    // ---- Per-bus guide assignment, rebuilt dynamically as "Number of buses" changes ----
+    const guideAssignLabel = document.createElement("label");
+    guideAssignLabel.textContent = "Assign a bus guide to each bus";
+    screen.appendChild(guideAssignLabel);
+    const guideAssignHint = document.createElement("p");
+    guideAssignHint.className = "subtitle";
+    guideAssignHint.style.marginTop = "-8px";
+    guideAssignHint.textContent = "Guides will only see runs they're assigned to \u2014 leave a bus blank to assign it later.";
+    screen.appendChild(guideAssignHint);
+    const guideAssignHolder = document.createElement("div");
+    screen.appendChild(guideAssignHolder);
+
+    let rosterCache = [];
+    function rebuildGuideSelects() {
+      const n = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
+      const priorValues = Array.from(guideAssignHolder.querySelectorAll("select")).map(s => s.value);
+      guideAssignHolder.innerHTML = "";
+      for (let i = 1; i <= n; i++) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:8px;";
+        const tag = document.createElement("span");
+        tag.style.cssText = "font-family:var(--mono); font-size:13px; color:var(--text-dim); width:44px; flex-shrink:0;";
+        tag.textContent = "Bus " + i;
+        const sel = document.createElement("select");
+        sel.dataset.busIndex = String(i);
+        sel.style.flex = "1";
+        const blankOpt = document.createElement("option");
+        blankOpt.value = ""; blankOpt.textContent = "\u2014 Unassigned \u2014";
+        sel.appendChild(blankOpt);
+        rosterCache.forEach(g => {
+          const opt = document.createElement("option");
+          opt.value = g.name; opt.textContent = g.name;
+          sel.appendChild(opt);
+        });
+        if (priorValues[i - 1] && rosterCache.some(g => g.name === priorValues[i - 1])) sel.value = priorValues[i - 1];
+        row.appendChild(tag); row.appendChild(sel);
+        guideAssignHolder.appendChild(row);
+      }
+    }
+    busInput.addEventListener("input", rebuildGuideSelects);
+    const noGuidesNote = document.createElement("div");
+    noGuidesNote.className = "banner";
+    noGuidesNote.style.marginTop = "10px";
+    noGuidesNote.style.display = "none";
+    noGuidesNote.textContent = "No guides in your roster yet \u2014 add them from the Guides section above, then come back here to assign them.";
+    screen.appendChild(noGuidesNote);
+    loadRoster().then(r => {
+      rosterCache = r;
+      rebuildGuideSelects();
+      noGuidesNote.style.display = rosterCache.length ? "none" : "block";
+    });
+
     const cateringRow = document.createElement("div");
     cateringRow.className = "checkbox-row";
     const cateringCheck = document.createElement("input"); cateringCheck.type = "checkbox"; cateringCheck.id = "catering-check";
@@ -2024,8 +2117,7 @@
     const manifestLabel = document.createElement("label"); manifestLabel.textContent = "Passenger manifest \u2014 one name per line";
     const manifestArea = document.createElement("textarea"); manifestArea.placeholder = "Jane Rider\nJohn Traveler\nAlex Guest\n\u2026";
 
-    [runIdLabel, runIdInput, descLabel, descInput, originLabel, originInput, destLabel, destInput,
-     stageLabel, stageInput, busLabel, busInput, companyLabel, companySelect, cateringRow, cateringDetailsLabel, cateringDetailsInput,
+    [cateringRow, cateringDetailsLabel, cateringDetailsInput,
      notesLabel, notesInput, manifestLabel, manifestArea].forEach(el => screen.appendChild(el));
 
     const btnRow = document.createElement("div");
@@ -2041,11 +2133,15 @@
       const numBuses = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
       const names = manifestArea.value.split("\n").map(n => n.trim()).filter(Boolean);
       const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
-      const buses = Array.from({ length: numBuses }, (_, i) => ({
-        num: i + 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null, completedAt: null,
-        eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
-        guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
-      }));
+      const guideSelects = Array.from(guideAssignHolder.querySelectorAll("select"));
+      const buses = Array.from({ length: numBuses }, (_, i) => {
+        const sel = guideSelects.find(s => s.dataset.busIndex === String(i + 1));
+        return {
+          num: i + 1, status: "Not Started", guideName: sel ? sel.value : "", stagingAt: null, departedAt: null, completedAt: null,
+          eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
+          guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+        };
+      });
       const run = {
         runId, description: descInput.value.trim(), origin: originInput.value.trim(), destination: destInput.value.trim(),
         stagingLocation: stageInput.value.trim(), busCompany: companySelect.value, catering: cateringCheck.checked, cateringDetails: cateringDetailsInput.value.trim(),
@@ -2053,7 +2149,7 @@
       };
       createBtn.disabled = true; createBtn.textContent = "Creating\u2026";
       await saveRun(run);
-      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt });
+      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
       await setJSON("run-index", state.runIndex);
       showToast("Run " + runId + " created");
       state.coordTab = "dashboard";
@@ -2293,6 +2389,7 @@
         const oldGuideName = freshBus.guideName;
         freshBus.guideName = select.value;
         await saveRun(fresh);
+        await updateRunIndexEntry(run.runId, { assignedGuides: computeAssignedGuides(fresh.buses) });
         if (oldGuideName && oldGuideName !== select.value) {
           const rosterList = await loadRoster();
           const oldGuide = rosterList.find(g => g.name === oldGuideName);
