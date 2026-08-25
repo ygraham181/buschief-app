@@ -355,6 +355,7 @@
       "coord-run-detail": renderCoordRunDetail, "coord-bus-detail": renderCoordBusDetail,
       "courtesy-home": renderCourtesyHome, "courtesy-pin": renderCourtesyPin,
       "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
+      "coord-sheet-settings": renderCoordSheetSettings,
     };
     wrap.appendChild(views[state.view]());
     root.appendChild(wrap);
@@ -1051,11 +1052,25 @@
 
     async function refresh() {
       if (state.view !== "coord-home") return;
+      // Settings and Search are forms/lookups you're actively interacting with —
+      // an automatic rebuild would wipe out anything mid-typing, so only the
+      // live-glance views (Dashboard, Courtesy Flow) refresh on their own.
+      if (state.coordTab === "settings" || state.coordTab === "search") return;
       await loadIndex();
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
         : [];
       if (state.view !== "coord-home") return;
+      if (state.coordTab === "settings" || state.coordTab === "search") return;
+      contentHolder.innerHTML = "";
+      if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
+      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs));
+    }
+
+    async function renderCurrentTab() {
+      const runs = state.runIndex.length
+        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        : [];
       contentHolder.innerHTML = "";
       if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
       else if (state.coordTab === "search") contentHolder.appendChild(buildSearchTab(runs));
@@ -1063,8 +1078,8 @@
       else if (state.coordTab === "settings") contentHolder.appendChild(buildSettingsTab());
     }
 
-    refresh();
-    startPolling(refresh, 10000);
+    renderCurrentTab();
+    startPolling(refresh, 60000);
     return c;
   }
 
@@ -1379,7 +1394,7 @@
       holder.appendChild(buildCourtesyContent(runs));
     }
     refresh();
-    startPolling(refresh, 10000);
+    startPolling(refresh, 60000);
     return c;
   }
 
@@ -1473,7 +1488,7 @@
       else contentHolder.appendChild(buildHelpdeskSearchTab(runs, roster));
     }
     refresh();
-    startPolling(refresh, 10000);
+    startPolling(refresh, 60000);
     return c;
   }
 
@@ -1818,10 +1833,39 @@
     sheetHeading.textContent = "Google Sheet live sync";
     sheetHeading.style.marginTop = "28px";
     wrap.appendChild(sheetHeading);
+    const sheetSub = document.createElement("p");
+    sheetSub.className = "subtitle";
+    sheetSub.textContent = "The connection URL and sync script live on their own screen, away from everyday setup, so there's no risk of bumping them by accident.";
+    wrap.appendChild(sheetSub);
+    const sheetLinkBtn = document.createElement("button");
+    sheetLinkBtn.className = "btn btn-secondary";
+    sheetLinkBtn.textContent = "\u2699\uFE0F Manage Google Sheet Connection";
+    sheetLinkBtn.onclick = () => go("coord-sheet-settings");
+    wrap.appendChild(sheetLinkBtn);
+    loadWebhookUrl().then(u => {
+      const statusLine = document.createElement("p");
+      statusLine.className = "subtitle";
+      statusLine.style.fontSize = "12px";
+      statusLine.style.marginTop = "8px";
+      statusLine.textContent = u ? "Currently connected." : "Not connected yet.";
+      wrap.appendChild(statusLine);
+    });
+
+    return wrap;
+  }
+
+  // ---------- Coordinator: Google Sheet connection (its own screen, away from everyday setup) ----------
+  function renderCoordSheetSettings() {
+    const c = document.createElement("div");
+    c.appendChild(topbar("Sheet Connection", () => go("coord-home")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Google Sheet Live Sync</h2>`;
+
     const sheetBanner = document.createElement("div");
     sheetBanner.className = "banner";
     sheetBanner.textContent = "One-time setup: paste the code below into a Google Apps Script bound to your sheet, deploy it as a web app, then paste the resulting URL here.";
-    wrap.appendChild(sheetBanner);
+    screen.appendChild(sheetBanner);
 
     const codeBox = document.createElement("div");
     codeBox.className = "code-box";
@@ -1853,26 +1897,37 @@
     .setMimeType(ContentService.MimeType.JSON);
 }`;
     codeBox.textContent = appsScript;
-    wrap.appendChild(codeBox);
+    screen.appendChild(codeBox);
     const copyCodeBtn = document.createElement("button");
     copyCodeBtn.className = "btn btn-secondary"; copyCodeBtn.style.marginTop = "10px"; copyCodeBtn.textContent = "Copy Apps Script code";
     copyCodeBtn.onclick = async () => {
       try { await navigator.clipboard.writeText(appsScript); showToast("Copied"); }
       catch (e) { showToast("Copy not available \u2014 select manually"); }
     };
-    wrap.appendChild(copyCodeBtn);
+    screen.appendChild(copyCodeBtn);
 
     const urlLabel = document.createElement("label"); urlLabel.textContent = "Web app URL"; urlLabel.style.marginTop = "18px";
     const urlInput = document.createElement("input");
     urlInput.type = "text"; urlInput.placeholder = "https://script.google.com/macros/s/.../exec";
-    wrap.appendChild(urlLabel); wrap.appendChild(urlInput);
+    screen.appendChild(urlLabel); screen.appendChild(urlInput);
     loadWebhookUrl().then(u => { urlInput.value = u || ""; });
     const saveUrlBtn = document.createElement("button");
     saveUrlBtn.className = "btn btn-primary"; saveUrlBtn.style.marginTop = "10px"; saveUrlBtn.textContent = "Save sheet connection";
     saveUrlBtn.onclick = async () => { await saveWebhookUrl(urlInput.value.trim()); showToast("Saved \u2014 updates will now sync to your sheet"); };
-    wrap.appendChild(saveUrlBtn);
+    screen.appendChild(saveUrlBtn);
 
-    return wrap;
+    const disconnectBtn = document.createElement("button");
+    disconnectBtn.className = "btn btn-danger"; disconnectBtn.style.marginTop = "24px"; disconnectBtn.textContent = "Disconnect sheet";
+    disconnectBtn.onclick = async () => {
+      if (!confirm("Stop syncing to this Google Sheet? You can reconnect any time.")) return;
+      await saveWebhookUrl("");
+      urlInput.value = "";
+      showToast("Disconnected");
+    };
+    screen.appendChild(disconnectBtn);
+
+    c.appendChild(screen);
+    return c;
   }
 
   async function downloadImportTemplate() {
@@ -2288,7 +2343,7 @@
       if (state.view !== "coord-run-detail") return;
       const fresh = await loadRun(run.runId);
       if (fresh) { state.currentRun = fresh; updateLiveParts(); }
-    }, 5000);
+    }, 60000);
     return c;
   }
 
@@ -2303,7 +2358,7 @@
         if (state.view !== "coord-run-detail") return;
         const fresh = await loadRun(run.runId);
         if (fresh) { state.currentRun = fresh; }
-      }, 5000);
+      }, 60000);
     }));
     const screen = document.createElement("div");
     screen.className = "screen";
@@ -2436,7 +2491,7 @@
       if (state.view !== "coord-bus-detail") return;
       const fresh = await loadRun(run.runId);
       if (fresh) { state.currentRun = fresh; renderBody(); }
-    }, 5000);
+    }, 60000);
     return c;
   }
 
