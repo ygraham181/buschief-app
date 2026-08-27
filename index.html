@@ -192,6 +192,7 @@
 (function () {
   const STATUS_ORDER = ["Not Started", "At Staging", "In Route", "Completed"];
   const BUS_COMPANIES = ["Academy Express", "Raritan Valley", "American Dream Coaches"];
+  const COORD_SESSION_MS = 10 * 60 * 1000; // stay signed in for 10 minutes of inactivity
   function getChecklistItems(run) {
     const items = [
       { key: "guideArrived", question: "Has the guide arrived at the staging location?", short: "Guide arrived at staging" },
@@ -222,6 +223,7 @@
     coordTab: "dashboard",
     courtesySelectedDestination: null,
     editingGuideIndex: null,
+    coordAuthedAt: null,
     courtesyPinInput: "",
     forceEtaOpen: false,
     helpdeskPinInput: "",
@@ -342,7 +344,23 @@
     return Math.floor(s / 3600) + "h ago";
   }
 
+  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings"]);
+
   function render() {
+    // Any activity while on a coordinator screen keeps the 10-minute session alive.
+    // If the session has expired, drop back to the password screen instead of
+    // whatever coordinator screen was requested.
+    if (COORD_VIEWS.has(state.view)) {
+      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < COORD_SESSION_MS) {
+        state.coordAuthedAt = Date.now();
+      } else {
+        state.coordAuthedAt = null;
+        state.view = "coord-pin";
+        // set the toast directly rather than via showToast() to avoid re-entering render()
+        state.toast = "Session timed out \u2014 please sign in again";
+        setTimeout(() => { const el = document.getElementById("toast-el"); if (el) el.classList.remove("show"); }, 1800);
+      }
+    }
     const root = document.getElementById("app-root");
     root.innerHTML = "";
     const wrap = document.createElement("div");
@@ -399,7 +417,17 @@
     const coordCard = document.createElement("button");
     coordCard.className = "role-card";
     coordCard.innerHTML = `<div class="kicker">Dispatch</div><div class="title">I'm the Coordinator</div><div class="desc">Create runs, manage guide PINs, and watch live boarding, ETAs, and location.</div>`;
-    coordCard.onclick = () => { state.role = "coordinator"; state.pinInput = ""; go("coord-pin"); };
+    coordCard.onclick = () => {
+      state.role = "coordinator"; state.pinInput = "";
+      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < COORD_SESSION_MS) {
+        state.coordAuthedAt = Date.now();
+        state.coordTab = state.coordTab || "dashboard";
+        go("coord-home");
+      } else {
+        state.coordAuthedAt = null;
+        go("coord-pin");
+      }
+    };
     const courtesyCard = document.createElement("button");
     courtesyCard.className = "role-card";
     courtesyCard.innerHTML = `<div class="kicker">Reception</div><div class="title">Courtesy Flow</div><div class="desc">See every inbound bus grouped by destination, with live ETAs. Shared PIN required.</div>`;
@@ -1018,6 +1046,7 @@
           if (p1.value.length < 8) { showToast("Password must be at least 8 characters"); return; }
           if (p1.value !== p2.value) { showToast("Passwords don't match"); return; }
           await saveCoordPin(p1.value);
+          state.coordAuthedAt = Date.now();
           state.coordTab = "dashboard";
           go("coord-home");
         };
@@ -1034,6 +1063,7 @@
         btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
         btn.onclick = async () => {
           if (input.value !== pw) { showToast("Incorrect password"); return; }
+          state.coordAuthedAt = Date.now();
           state.coordTab = "dashboard";
           go("coord-home");
         };
@@ -1878,6 +1908,24 @@
       statusLine.textContent = u ? "Currently connected." : "Not connected yet.";
       wrap.appendChild(statusLine);
     });
+
+    const sessionHeading = document.createElement("h2");
+    sessionHeading.textContent = "Session";
+    sessionHeading.style.marginTop = "28px";
+    wrap.appendChild(sessionHeading);
+    const sessionSub = document.createElement("p");
+    sessionSub.className = "subtitle";
+    sessionSub.textContent = "You'll stay signed in for 10 minutes of inactivity. Handing off this device to someone else? Log out now instead of waiting.";
+    wrap.appendChild(sessionSub);
+    const logoutBtn = document.createElement("button");
+    logoutBtn.className = "btn btn-danger";
+    logoutBtn.textContent = "Log out";
+    logoutBtn.onclick = () => {
+      state.coordAuthedAt = null;
+      stopPolling();
+      go("role-select");
+    };
+    wrap.appendChild(logoutBtn);
 
     return wrap;
   }
