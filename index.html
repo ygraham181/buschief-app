@@ -224,6 +224,10 @@
     courtesySelectedDestination: null,
     editingGuideIndex: null,
     coordAuthedAt: null,
+    expandedLocationKeys: new Set(),
+    expandedNotBoardedKeys: new Set(),
+    courtesyMode: "arrival",
+    unboardedOnly: false,
     courtesyPinInput: "",
     forceEtaOpen: false,
     helpdeskPinInput: "",
@@ -331,6 +335,32 @@
   function computeAssignedGuides(buses) {
     return Array.from(new Set(buses.map(b => b.guideName).filter(Boolean)));
   }
+
+  // ---------- Geocoding: turn Origin/Destination/Staging text into map coordinates ----------
+  // Uses OpenStreetMap's free Nominatim service, cached in shared storage so each
+  // location is only ever looked up once across everyone using the app.
+  let geocodeQueue = Promise.resolve();
+  async function geocodeLocation(query) {
+    const q = (query || "").trim();
+    if (!q) return null;
+    const cache = await getJSON("geocode-cache", {});
+    const key = q.toLowerCase();
+    if (cache[key] !== undefined) return cache[key];
+    // throttle to be a good citizen of the free geocoding service (~1 req/sec)
+    const result = await (geocodeQueue = geocodeQueue.then(async () => {
+      try {
+        await new Promise(r => setTimeout(r, 1100));
+        const resp = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q));
+        const data = await resp.json();
+        if (data && data[0]) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        return null;
+      } catch (e) { console.warn("geocode failed", q, e); return null; }
+    }));
+    const freshCache = await getJSON("geocode-cache", {});
+    freshCache[key] = result;
+    await setJSON("geocode-cache", freshCache);
+    return result;
+  }
   async function updateRunIndexEntry(runId, patch) {
     const idx = await getJSON("run-index", []);
     const i = idx.findIndex(r => r.runId === runId);
@@ -344,7 +374,7 @@
     return Math.floor(s / 3600) + "h ago";
   }
 
-  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings"]);
+  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit"]);
 
   function render() {
     // Any activity while on a coordinator screen keeps the 10-minute session alive.
@@ -374,6 +404,7 @@
       "courtesy-home": renderCourtesyHome, "courtesy-pin": renderCourtesyPin,
       "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
       "coord-sheet-settings": renderCoordSheetSettings,
+      "coord-manifest-edit": renderCoordManifestEdit,
     };
     wrap.appendChild(views[state.view]());
     root.appendChild(wrap);
@@ -497,25 +528,66 @@
     const screen = document.createElement("div");
     screen.className = "screen";
     screen.innerHTML = `<h2>Your runs</h2><p class="subtitle" style="margin-bottom:16px;">Signed in as <b style="color:var(--text)">${esc(state.guideName)}</b>. Only runs your coordinator has assigned to you show up here.</p>`;
-    const myRuns = state.runIndex.filter(r => r.assignedGuides && r.assignedGuides.includes(state.guideName));
-    if (!myRuns.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.innerHTML = `<div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.`;
-      screen.appendChild(empty);
-    } else {
-      myRuns.slice().sort((a,b) => a.runId.localeCompare(b.runId)).forEach(r => {
-        const card = document.createElement("div");
-        card.className = "card";
-        const btn = document.createElement("button");
-        btn.className = "list-btn";
-        btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(r.runId)}</div><div class="run-desc">${esc(r.description || "")}</div></div><div class="chev">\u203A</div></div>`;
-        btn.onclick = async () => { stopPolling(); state.currentRun = await loadRun(r.runId); state.guideBus = null; go("guide-route-fork"); };
-        card.appendChild(btn);
-        screen.appendChild(card);
-      });
-    }
+    const holder = document.createElement("div");
+    holder.innerHTML = `<div class="empty-state" style="padding:30px 0;">Loading\u2026</div>`;
+    screen.appendChild(holder);
     c.appendChild(screen);
+
+    function runCard(r) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const btn = document.createElement("button");
+      btn.className = "list-btn";
+      btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(r.runId)}</div><div class="run-desc">${esc(r.description || "")}</div></div><div class="chev">\u203A</div></div>`;
+      btn.onclick = async () => { stopPolling(); state.currentRun = await loadRun(r.runId); state.guideBus = null; go("guide-route-fork"); };
+      card.appendChild(btn);
+      return card;
+    }
+
+    (async () => {
+      const myEntries = state.runIndex.filter(r => r.assignedGuides && r.assignedGuides.includes(state.guideName));
+      holder.innerHTML = "";
+      if (!myEntries.length) {
+        holder.innerHTML = `<div class="empty-state"><div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.</div>`;
+        return;
+      }
+      const fullRuns = (await Promise.all(myEntries.map(e => loadRun(e.runId)))).filter(Boolean);
+      const active = [], previous = [];
+      fullRuns.forEach(run => {
+        const myBuses = run.buses.filter(b => b.guideName === state.guideName);
+        const allDone = myBuses.length > 0 && myBuses.every(b => b.status === "Completed");
+        (allDone ? previous : active).push(run);
+      });
+      active.sort((a, b) => a.runId.localeCompare(b.runId));
+      previous.sort((a, b) => a.runId.localeCompare(b.runId));
+
+      if (!active.length && !previous.length) {
+        holder.innerHTML = `<div class="empty-state"><div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.</div>`;
+        return;
+      }
+
+      const activeHeading = document.createElement("h3");
+      activeHeading.textContent = "Active Runs";
+      holder.appendChild(activeHeading);
+      if (active.length) active.forEach(r => holder.appendChild(runCard(r)));
+      else holder.innerHTML += `<div class="empty-state" style="padding:16px 0;">Nothing active right now.</div>`;
+
+      if (previous.length) {
+        const prevHeading = document.createElement("h3");
+        prevHeading.textContent = "Previous Runs";
+        holder.appendChild(prevHeading);
+        const prevNote = document.createElement("p");
+        prevNote.className = "subtitle"; prevNote.style.fontSize = "12px"; prevNote.style.marginTop = "-4px";
+        prevNote.textContent = "Completed \u2014 kept here for reference, no longer live.";
+        holder.appendChild(prevNote);
+        previous.forEach(r => {
+          const card = runCard(r);
+          card.style.opacity = "0.6";
+          holder.appendChild(card);
+        });
+      }
+    })();
+
     return c;
   }
 
@@ -725,6 +797,7 @@
     const busNum = state.guideBus;
     const myBus = () => state.currentRun.buses.find(b => b.num === busNum);
     state.forceEtaOpen = false;
+    state.unboardedOnly = false;
 
     const c = document.createElement("div");
     c.appendChild(topbar(run.runId + " \u00b7 Bus " + busNum, () => go("guide-setup")));
@@ -952,10 +1025,28 @@
       const total = state.currentRun.manifest.length;
       const stats = document.createElement("div");
       stats.className = "stat-strip";
-      stats.innerHTML = `<div class="stat-box"><div class="num">${mine}</div><div class="lbl">On this bus</div></div>
-        <div class="stat-box"><div class="num">${boarded}/${total}</div><div class="lbl">Run boarded</div></div>
-        <div class="stat-box"><div class="num">${total - boarded}</div><div class="lbl">Remaining</div></div>`;
+      function statsHtml(mineC, boardedC, totalC) {
+        const remainingActive = state.unboardedOnly;
+        return `<div class="stat-box"><div class="num">${mineC}</div><div class="lbl">On this bus</div></div>
+          <div class="stat-box"><div class="num">${boardedC}/${totalC}</div><div class="lbl">Run boarded</div></div>
+          <button type="button" class="stat-box" id="remaining-toggle" style="cursor:pointer; border:1px solid ${remainingActive ? "var(--brand)" : "var(--border)"}; background:${remainingActive ? "var(--brand-dim)" : "var(--panel-alt)"};">
+            <div class="num">${totalC - boardedC}</div><div class="lbl">${remainingActive ? "Showing not boarded" : "Not boarded \u2014 tap"}</div>
+          </button>`;
+      }
+      stats.innerHTML = statsHtml(mine, boarded, total);
       bodyHolder.appendChild(stats);
+      function wireRemainingToggle() {
+        const btn = document.getElementById("remaining-toggle");
+        if (btn) btn.onclick = () => { state.unboardedOnly = !state.unboardedOnly; renderManifestList(); wireRemainingToggle(); refreshStatsDisplay(); };
+      }
+      function refreshStatsDisplay() {
+        const b2 = busBoardedCount(state.currentRun, busNum);
+        const t2 = totalBoarded(state.currentRun);
+        const tot = state.currentRun.manifest.length;
+        stats.innerHTML = statsHtml(b2, t2, tot);
+        wireRemainingToggle();
+      }
+      wireRemainingToggle();
 
       const searchWrap = document.createElement("div");
       searchWrap.className = "search-wrap";
@@ -974,8 +1065,9 @@
         if (!holder) return;
         holder.innerHTML = "";
         const q = state.search.trim().toLowerCase();
-        const filtered = state.currentRun.manifest.filter(p => !q || p.name.toLowerCase().includes(q));
-        if (!filtered.length) { holder.innerHTML = `<div class="empty-state" style="padding:30px 10px;">No matches.</div>`; return; }
+        let filtered = state.currentRun.manifest.filter(p => !q || p.name.toLowerCase().includes(q));
+        if (state.unboardedOnly) filtered = filtered.filter(p => !p.boarded);
+        if (!filtered.length) { holder.innerHTML = `<div class="empty-state" style="padding:30px 10px;">${state.unboardedOnly ? "Everyone's boarded! \uD83C\uDF89" : "No matches."}</div>`; return; }
         filtered.forEach(p => {
           const row = document.createElement("div");
           const mineRow = p.boarded && p.busNum === busNum;
@@ -993,20 +1085,13 @@
               await saveRun(fresh);
               state.currentRun = fresh;
               renderManifestList();
-              updateStatsInPlace();
+              refreshStatsDisplay();
             };
           }
           holder.appendChild(row);
         });
       }
-      function updateStatsInPlace() {
-        const b2 = busBoardedCount(state.currentRun, busNum);
-        const t2 = totalBoarded(state.currentRun);
-        const tot = state.currentRun.manifest.length;
-        stats.innerHTML = `<div class="stat-box"><div class="num">${b2}</div><div class="lbl">On this bus</div></div>
-          <div class="stat-box"><div class="num">${t2}/${tot}</div><div class="lbl">Run boarded</div></div>
-          <div class="stat-box"><div class="num">${tot - t2}</div><div class="lbl">Remaining</div></div>`;
-      }
+      function updateStatsInPlace() { refreshStatsDisplay(); }
       refreshManifestLive = () => { renderManifestList(); updateStatsInPlace(); renderEtaBanner(); updateGpsRow(); };
       renderManifestList();
     }
@@ -1077,7 +1162,7 @@
   // ---------- Coordinator: tabbed home (Dashboard / Search / Courtesy Flow / Settings) ----------
   function renderCoordHome() {
     const c = document.createElement("div");
-    c.appendChild(topbar("Coordinator", () => { stopPolling(); go("role-select"); }));
+    c.appendChild(topbar("Coordinator", () => { stopPolling(); destroyFleetMap(); go("role-select"); }));
     const screen = document.createElement("div");
     screen.className = "screen";
 
@@ -1090,6 +1175,7 @@
     tabBar.className = "tab-bar";
     const tabs = [
       { id: "dashboard", label: "Dashboard", icon: "\u{1F4CA}" },
+      { id: "map", label: "Fleet Map", icon: "\u{1F5FA}\uFE0F" },
       { id: "search", label: "Search", icon: "\u{1F50D}" },
       { id: "courtesy", label: "Courtesy Flow", icon: "\u{1F697}" },
       { id: "settings", label: "Settings", icon: "\u2699\uFE0F" },
@@ -1112,27 +1198,32 @@
       if (state.view !== "coord-home") return;
       // Settings and Search are forms/lookups you're actively interacting with —
       // an automatic rebuild would wipe out anything mid-typing, so only the
-      // live-glance views (Dashboard, Courtesy Flow) refresh on their own.
+      // live-glance views (Dashboard, Courtesy Flow, Fleet Map) refresh on their own.
       if (state.coordTab === "settings" || state.coordTab === "search") return;
       await loadIndex();
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
         : [];
+      const roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
       if (state.view !== "coord-home") return;
       if (state.coordTab === "settings" || state.coordTab === "search") return;
+      if (state.coordTab !== "map") destroyFleetMap();
       contentHolder.innerHTML = "";
       if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
-      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs));
+      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs, roster));
+      else if (state.coordTab === "map") contentHolder.appendChild(buildFleetMapTab(runs, roster));
     }
 
     async function renderCurrentTab() {
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
         : [];
+      if (state.coordTab !== "map") destroyFleetMap();
       contentHolder.innerHTML = "";
       if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
       else if (state.coordTab === "search") contentHolder.appendChild(buildSearchTab(runs));
-      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs));
+      else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs, await loadRoster()));
+      else if (state.coordTab === "map") contentHolder.appendChild(buildFleetMapTab(runs, await loadRoster()));
       else if (state.coordTab === "settings") contentHolder.appendChild(buildSettingsTab());
     }
 
@@ -1210,7 +1301,7 @@
       card.className = "card";
       const btn = document.createElement("button");
       btn.className = "list-btn";
-      const chips = run.buses.map(b => `<span class="status-pill ${STATUS_CLASS(b.status)}" style="margin-right:6px;"><span class="sdot"></span>Bus ${b.num}</span>`).join("");
+      const chips = run.buses.map(b => `<span class="status-pill ${STATUS_CLASS(b.status)}" style="margin-right:6px; margin-bottom:4px; display:inline-flex;"><span class="sdot"></span>Bus ${b.num}${b.guideName ? " \u00b7 " + esc(b.guideName) : ""}</span>`).join("");
       btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>${run.busCompany ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}</div></div>
         <div style="margin:10px 0 8px;">${chips}</div>
         <div class="run-row"><span class="status-pill ${STATUS_CLASS(agg)}"><span class="sdot"></span>${agg}</span><span style="font-family:var(--mono); font-size:13px;">${boarded} / ${total} boarded</span></div>`;
@@ -1295,32 +1386,250 @@
   // ---------- Courtesy Flow content: runs grouped by destination ----------
   // Shared between the Coordinator's "Courtesy Flow" tab and the standalone
   // no-PIN Courtesy Flow role reachable from the role-select screen.
-  function groupRunsByDestination(runs) {
+  // ---------- Fleet Map tab: everyone's live location, plus pickup/drop-off pins ----------
+  let fleetMapInstance = null;
+  let fleetMapMarkers = {};
+  function destroyFleetMap() { if (fleetMapInstance) { fleetMapInstance.remove(); fleetMapInstance = null; fleetMapMarkers = {}; } }
+
+  function buildFleetMapTab(runs, roster) {
+    const wrap = document.createElement("div");
+    const heading = document.createElement("h2");
+    heading.textContent = "Fleet Map";
+    wrap.appendChild(heading);
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Every guide currently sharing a live location, across every run, plus pickup and drop-off points.";
+    wrap.appendChild(sub);
+
+    const legend = document.createElement("div");
+    legend.style.cssText = "display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; font-size:12px; color:var(--text-dim);";
+    legend.innerHTML = `
+      <span>\u{1F535} Live bus</span>
+      <span>\u{1F7E2} Origin / staging</span>
+      <span>\u{1F7E0} Destination</span>`;
+    wrap.appendChild(legend);
+
+    const mapDiv = document.createElement("div");
+    mapDiv.id = "fleet-map";
+    mapDiv.style.cssText = "height:400px; border-radius:12px; overflow:hidden; border:1px solid var(--border);";
+    wrap.appendChild(mapDiv);
+
+    const statusLine = document.createElement("p");
+    statusLine.className = "subtitle";
+    statusLine.style.fontSize = "12px";
+    statusLine.style.marginTop = "10px";
+    wrap.appendChild(statusLine);
+
+    const liveBuses = [];
+    runs.forEach(run => run.buses.forEach(bus => { if (bus.loc) liveBuses.push({ run, bus }); }));
+    statusLine.textContent = liveBuses.length
+      ? liveBuses.length + " bus" + (liveBuses.length === 1 ? "" : "es") + " currently sharing location."
+      : "No buses are currently sharing a live location \u2014 markers appear once a bus goes In Route.";
+
+    setTimeout(async () => {
+      if (typeof L === "undefined") { statusLine.textContent = "Map couldn't load \u2014 check your internet connection."; return; }
+      const el = document.getElementById("fleet-map");
+      if (!el) return;
+      if (!fleetMapInstance) {
+        fleetMapInstance = L.map(el, { attributionControl: false }).setView([39.5, -98.35], 4);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(fleetMapInstance);
+      }
+      const bounds = [];
+
+      // live bus/guide markers
+      liveBuses.forEach(({ run, bus }) => {
+        const key = "bus-" + run.runId + "-" + bus.num;
+        const popupHtml = `<b>${esc(bus.guideName || "Bus " + bus.num)}</b><br/>${esc(run.runId)} \u00b7 Bus ${bus.num}<br/>${bus.status}<br/>Updated ${timeAgo(bus.loc.at)}`;
+        if (fleetMapMarkers[key]) {
+          fleetMapMarkers[key].setLatLng([bus.loc.lat, bus.loc.lng]);
+          fleetMapMarkers[key].setPopupContent(popupHtml);
+        } else {
+          fleetMapMarkers[key] = L.marker([bus.loc.lat, bus.loc.lng]).addTo(fleetMapInstance).bindPopup(popupHtml);
+        }
+        bounds.push([bus.loc.lat, bus.loc.lng]);
+      });
+
+      // unique pickup/drop-off locations, geocoded and cached
+      const originMap = {}, destMap = {};
+      runs.forEach(run => {
+        if (run.origin) { const k = run.origin.trim(); if (k) (originMap[k] = originMap[k] || []).push(run.runId); }
+        if (run.stagingLocation) { const k = run.stagingLocation.trim(); if (k) (originMap[k] = originMap[k] || []).push(run.runId); }
+        if (run.destination) { const k = run.destination.trim(); if (k) (destMap[k] = destMap[k] || []).push(run.runId); }
+      });
+
+      for (const [locName, runIds] of Object.entries(originMap)) {
+        const key = "origin-" + locName;
+        if (fleetMapMarkers[key]) continue;
+        const coords = await geocodeLocation(locName);
+        if (!coords) continue;
+        const uniqueRuns = Array.from(new Set(runIds));
+        const marker = L.circleMarker([coords.lat, coords.lng], { radius: 9, color: "#34D399", fillColor: "#34D399", fillOpacity: 0.9, weight: 2 })
+          .addTo(fleetMapInstance)
+          .bindPopup(`<b>${esc(locName)}</b><br/>Origin / staging for: ${esc(uniqueRuns.join(", "))}`);
+        fleetMapMarkers[key] = marker;
+        bounds.push([coords.lat, coords.lng]);
+      }
+      for (const [locName, runIds] of Object.entries(destMap)) {
+        const key = "dest-" + locName;
+        if (fleetMapMarkers[key]) continue;
+        const coords = await geocodeLocation(locName);
+        if (!coords) continue;
+        const uniqueRuns = Array.from(new Set(runIds));
+        const marker = L.circleMarker([coords.lat, coords.lng], { radius: 9, color: "#E8963A", fillColor: "#E8963A", fillOpacity: 0.9, weight: 2 })
+          .addTo(fleetMapInstance)
+          .bindPopup(`<b>${esc(locName)}</b><br/>Destination for: ${esc(uniqueRuns.join(", "))}`);
+        fleetMapMarkers[key] = marker;
+        bounds.push([coords.lat, coords.lng]);
+      }
+
+      if (bounds.length === 1) fleetMapInstance.setView(bounds[0], 12);
+      else if (bounds.length > 1) fleetMapInstance.fitBounds(bounds, { padding: [30, 30] });
+    }, 0);
+
+    return wrap;
+  }
+
+  function groupRunsByLocation(runs, field) {
     const groups = {};
     runs.forEach(run => {
-      const dest = (run.destination || "").trim();
-      const key = dest ? dest.toLowerCase() : "\u0000unspecified";
-      if (!groups[key]) groups[key] = { label: dest || "Unspecified destination", entries: [] };
+      const loc = (run[field] || "").trim();
+      const key = loc ? loc.toLowerCase() : "\u0000unspecified";
+      if (!groups[key]) groups[key] = { label: loc || "Unspecified location", entries: [] };
       run.buses.forEach(b => groups[key].entries.push({ run, bus: b }));
     });
     return groups;
   }
 
-  function buildCourtesyContent(runs) {
+  // Shared "who hasn't boarded yet" expandable list — boarding is fluid across
+  // buses on a run, so this is scoped per run, not per bus.
+  function renderNotBoardedToggle(container, run) {
+    const notBoarded = run.manifest.filter(p => !p.boarded);
+    const key = "nb-" + run.runId;
+    const btn = document.createElement("button");
+    btn.className = "link-btn";
+    btn.style.cssText = "margin-top:8px; font-size:12.5px; display:block;";
+    const isOpen = state.expandedNotBoardedKeys.has(key);
+    btn.textContent = (isOpen ? "\u25B2 Hide" : "\u25BC View") + " who hasn't boarded (" + notBoarded.length + ")";
+    btn.onclick = () => {
+      if (isOpen) state.expandedNotBoardedKeys.delete(key); else state.expandedNotBoardedKeys.add(key);
+      render();
+    };
+    container.appendChild(btn);
+    if (isOpen) {
+      const listBox = document.createElement("div");
+      listBox.style.cssText = "margin-top:8px; max-height:240px; overflow-y:auto; background:var(--panel-alt); border:1px solid var(--border); border-radius:8px; padding:4px 12px;";
+      if (!notBoarded.length) {
+        listBox.innerHTML = `<div style="padding:10px 0; font-size:13px; color:var(--text-dim);">Everyone's boarded.</div>`;
+      } else {
+        notBoarded.slice(0, 300).forEach(p => {
+          const row = document.createElement("div");
+          row.style.cssText = "padding:6px 0; font-size:13.5px; border-bottom:1px solid var(--border);";
+          row.textContent = p.name;
+          listBox.appendChild(row);
+        });
+        if (notBoarded.length > 300) {
+          const more = document.createElement("div");
+          more.style.cssText = "padding:6px 0; font-size:12px; color:var(--text-dim);";
+          more.textContent = (notBoarded.length - 300) + " more not shown.";
+          listBox.appendChild(more);
+        }
+      }
+      container.appendChild(listBox);
+    }
+  }
+
+  function buildCourtesyContent(runs, roster) {
+    roster = roster || [];
     const wrap = document.createElement("div");
-    const groups = groupRunsByDestination(runs);
-    const destKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
+
+    const modeBar = document.createElement("div");
+    modeBar.className = "tab-bar"; modeBar.style.marginBottom = "16px";
+    [
+      { id: "arrival", label: "Arrival to Hall" },
+      { id: "departure", label: "Departure from Hall" },
+      { id: "search", label: "Search" },
+    ].forEach(m => {
+      const btn = document.createElement("button");
+      btn.className = "tab-btn" + (state.courtesyMode === m.id ? " active" : "");
+      btn.textContent = m.label;
+      btn.onclick = () => { state.courtesyMode = m.id; state.courtesySelectedDestination = null; render(); };
+      modeBar.appendChild(btn);
+    });
+    wrap.appendChild(modeBar);
+
+    if (state.courtesyMode === "search") {
+      wrap.appendChild(buildHelpdeskSearchTab(runs, roster));
+      return wrap;
+    }
+
+    const field = state.courtesyMode === "departure" ? "origin" : "destination";
+    const verb = state.courtesyMode === "departure" ? "departing" : "arriving";
+    const groups = groupRunsByLocation(runs, field);
+    const locKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
 
     if (state.courtesySelectedDestination && groups[state.courtesySelectedDestination]) {
       const g = groups[state.courtesySelectedDestination];
       const backBtn = document.createElement("button");
-      backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All destinations";
+      backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All locations";
       backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
       wrap.appendChild(backBtn);
 
       const heading = document.createElement("h2");
       heading.textContent = g.label;
       wrap.appendChild(heading);
+
+      if (state.courtesyMode === "departure") {
+        const sub = document.createElement("p");
+        sub.className = "subtitle";
+        sub.textContent = "Runs departing from here, grouped by run \u2014 buses still boarding shown first.";
+        wrap.appendChild(sub);
+
+        const byRun = {};
+        g.entries.forEach(({ run, bus }) => {
+          if (!byRun[run.runId]) byRun[run.runId] = { run, buses: [] };
+          byRun[run.runId].buses.push(bus);
+        });
+        const runList = Object.values(byRun).sort((a, b) => {
+          const aActive = a.buses.some(b => b.status === "Not Started" || b.status === "At Staging");
+          const bActive = b.buses.some(b => b.status === "Not Started" || b.status === "At Staging");
+          if (aActive !== bActive) return aActive ? -1 : 1;
+          return a.run.runId.localeCompare(b.run.runId);
+        });
+        if (!runList.length) {
+          wrap.innerHTML += `<div class="empty-state">No runs currently departing from here.</div>`;
+        }
+        runList.forEach(({ run, buses }) => {
+          const totalPax = run.manifest.length;
+          const boardedPax = totalBoarded(run);
+          const card = document.createElement("div");
+          card.className = "card";
+          card.innerHTML = `<div class="run-row">
+              <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            </div>
+            <div class="stat-strip" style="margin:12px 0 8px;">
+              <div class="stat-box"><div class="num">${boardedPax}</div><div class="lbl">Boarded</div></div>
+              <div class="stat-box"><div class="num">${totalPax - boardedPax}</div><div class="lbl">Not boarded</div></div>
+              <div class="stat-box"><div class="num">${totalPax}</div><div class="lbl">Total</div></div>
+            </div>`;
+          buses.forEach(bus => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--border); font-size:13px;";
+            row.innerHTML = `<span>Bus ${bus.num}${bus.guideName ? " \u00b7 " + esc(bus.guideName) : ""}</span>
+              <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
+            card.appendChild(row);
+          });
+          if (run.busCompany) {
+            const co = document.createElement("div");
+            co.className = "bus-detail-meta"; co.style.marginTop = "6px";
+            co.textContent = "\u{1F68C} " + run.busCompany;
+            card.appendChild(co);
+          }
+          renderNotBoardedToggle(card, run);
+          wrap.appendChild(card);
+        });
+        return wrap;
+      }
+
       const sub = document.createElement("p");
       sub.className = "subtitle";
       sub.textContent = "Every bus heading here, soonest arrival first.";
@@ -1339,49 +1648,87 @@
       sorted.forEach(({ run, bus }) => {
         const pax = busBoardedCount(run, bus.num);
         const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+        const guide = bus.guideName ? roster.find(g2 => g2.name === bus.guideName) : null;
         const card = document.createElement("div");
         card.className = "card";
         card.innerHTML = `<div class="run-row">
-            <div><div class="run-id">${esc(run.runId)} \u00b7 Bus ${bus.num}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            <div><div class="run-id">${esc(run.runId)} \u00b7 Bus ${bus.num}${bus.guideName ? " \u00b7 " + esc(bus.guideName) : ""}</div><div class="run-desc">${esc(run.description || "")}</div></div>
             <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
           </div>
-          <div class="bus-detail-meta" style="margin-top:8px; font-size:13px;">
-            Guide: ${bus.guideName ? esc(bus.guideName) : "\u2014"} &middot; ETA: <b style="color:var(--text);">${etaText}</b> &middot; ${pax} passenger${pax === 1 ? "" : "s"}
+          <div class="stat-strip" style="margin:12px 0 8px;">
+            <div class="stat-box"><div class="num">${pax}</div><div class="lbl">Passengers</div></div>
+            <div class="stat-box"><div class="num" style="font-size:16px;">${etaText}</div><div class="lbl">ETA</div></div>
           </div>
+          ${bus.guideName ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">${contactLinksHtml(guide)}</div>` : ""}
           ${run.busCompany ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}`;
+        if (bus.loc) {
+          const locKey = run.runId + "-" + bus.num;
+          const locBtn = document.createElement("button");
+          locBtn.className = "link-btn";
+          locBtn.style.marginTop = "8px";
+          locBtn.textContent = (state.expandedLocationKeys.has(locKey) ? "\u{1F4CD} Hide live location" : "\u{1F4CD} View live location");
+          locBtn.onclick = () => {
+            if (state.expandedLocationKeys.has(locKey)) state.expandedLocationKeys.delete(locKey);
+            else state.expandedLocationKeys.add(locKey);
+            render();
+          };
+          card.appendChild(locBtn);
+          if (state.expandedLocationKeys.has(locKey)) {
+            const mapDiv = document.createElement("div");
+            mapDiv.id = "mini-map-" + locKey.replace(/[^a-zA-Z0-9]/g, "_");
+            mapDiv.style.cssText = "height:180px; border-radius:10px; overflow:hidden; margin-top:10px; border:1px solid var(--border);";
+            const staleness = document.createElement("div");
+            staleness.style.cssText = "font-size:11px; color:var(--text-dim); margin-top:6px;";
+            staleness.textContent = "Last updated " + timeAgo(bus.loc.at);
+            card.appendChild(mapDiv);
+            card.appendChild(staleness);
+            setTimeout(() => initMiniMap(mapDiv.id, bus.loc.lat, bus.loc.lng, bus.guideName || ("Bus " + bus.num)), 0);
+          }
+        }
         wrap.appendChild(card);
       });
       return wrap;
     }
 
     const heading = document.createElement("h2");
-    heading.textContent = "Courtesy Flow \u2014 by destination";
+    heading.textContent = "Courtesy Flow \u2014 " + (state.courtesyMode === "departure" ? "departures" : "arrivals") + " by location";
     wrap.appendChild(heading);
     const sub = document.createElement("p");
     sub.className = "subtitle";
-    sub.textContent = "Pick a destination to see every inbound bus and its ETA.";
+    sub.textContent = "Pick a location to see every bus " + verb + " there.";
     wrap.appendChild(sub);
 
-    if (!destKeys.length) {
-      wrap.innerHTML += `<div class="empty-state"><div class="big">\u{1F3E8}</div>No runs with a destination set yet.</div>`;
+    if (!locKeys.length) {
+      wrap.innerHTML += `<div class="empty-state"><div class="big">\u{1F3E8}</div>No runs with a${state.courtesyMode === "departure" ? "n origin" : " destination"} set yet.</div>`;
       return wrap;
     }
 
-    destKeys.forEach(key => {
+    locKeys.forEach(key => {
       const g = groups[key];
       const activeBuses = g.entries.filter(e => e.bus.status !== "Completed");
-      const nextEta = activeBuses
-        .filter(e => e.bus.status === "In Route" && e.bus.eta)
-        .map(e => e.bus.eta)
-        .sort((a, b) => a - b)[0];
       const card = document.createElement("div");
       card.className = "card";
       const btn = document.createElement("button");
       btn.className = "list-btn";
+      let metaLine = "";
+      if (state.courtesyMode === "departure") {
+        const runIdsHere = Array.from(new Set(g.entries.map(e => e.run.runId)));
+        const notBoardedTotal = runIdsHere.reduce((sum, rid) => {
+          const r = runs.find(rr => rr.runId === rid);
+          return sum + (r ? r.manifest.filter(p => !p.boarded).length : 0);
+        }, 0);
+        metaLine = `<div class="bus-detail-meta" style="margin-top:8px;">${notBoardedTotal} passenger${notBoardedTotal === 1 ? "" : "s"} still need boarding</div>`;
+      } else {
+        const nextEta = activeBuses
+          .filter(e => e.bus.status === "In Route" && e.bus.eta)
+          .map(e => e.bus.eta)
+          .sort((a, b) => a - b)[0];
+        metaLine = nextEta ? `<div class="bus-detail-meta" style="margin-top:8px;">Next arrival: <b style="color:var(--accent);">${new Date(nextEta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></div>` : "";
+      }
       btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(g.label)}</div>
-          <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} inbound</div></div>
+          <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} ${verb}</div></div>
           <div class="chev">\u203A</div></div>
-        ${nextEta ? `<div class="bus-detail-meta" style="margin-top:8px;">Next arrival: <b style="color:var(--accent);">${new Date(nextEta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></div>` : ""}`;
+        ${metaLine}`;
       btn.onclick = () => { state.courtesySelectedDestination = key; render(); };
       card.appendChild(btn);
       wrap.appendChild(card);
@@ -1447,9 +1794,10 @@
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
         : [];
+      const roster = await loadRoster();
       if (state.view !== "courtesy-home") return;
       holder.innerHTML = "";
-      holder.appendChild(buildCourtesyContent(runs));
+      holder.appendChild(buildCourtesyContent(runs, roster));
     }
     refresh();
     startPolling(refresh, 60000);
@@ -1542,7 +1890,7 @@
       const roster = await loadRoster();
       if (state.view !== "helpdesk-home") return;
       contentHolder.innerHTML = "";
-      if (state.helpdeskTab === "arrivals") contentHolder.appendChild(buildCourtesyContent(runs));
+      if (state.helpdeskTab === "arrivals") contentHolder.appendChild(buildCourtesyContent(runs, roster));
       else contentHolder.appendChild(buildHelpdeskSearchTab(runs, roster));
     }
     refresh();
@@ -1656,12 +2004,41 @@
           </div>`;
         run.buses.forEach(bus => {
           const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+          const guide = bus.guideName ? roster.find(g => g.name === bus.guideName) : null;
           const row = document.createElement("div");
-          row.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:8px;";
-          row.innerHTML = `<span style="font-size:13px;">Bus ${bus.num} \u00b7 ${bus.guideName ? esc(bus.guideName) : "No guide"} \u00b7 ETA ${etaText}</span>
-            <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
+          row.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border);";
+          row.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <span style="font-size:13px;">Bus ${bus.num} \u00b7 ${bus.guideName ? esc(bus.guideName) : "No guide"} \u00b7 ETA ${etaText}</span>
+              <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
+            </div>
+            ${bus.guideName ? `<div style="font-size:12.5px; color:var(--text-dim); margin-top:4px;">${contactLinksHtml(guide)}</div>` : ""}`;
           card.appendChild(row);
+          if (bus.loc) {
+            const locKey = "hd-" + run.runId + "-" + bus.num;
+            const locBtn = document.createElement("button");
+            locBtn.className = "link-btn";
+            locBtn.style.cssText = "margin-top:6px; font-size:12.5px;";
+            locBtn.textContent = state.expandedLocationKeys.has(locKey) ? "\u{1F4CD} Hide live location" : "\u{1F4CD} View live location";
+            locBtn.onclick = () => {
+              if (state.expandedLocationKeys.has(locKey)) state.expandedLocationKeys.delete(locKey);
+              else state.expandedLocationKeys.add(locKey);
+              render();
+            };
+            row.appendChild(locBtn);
+            if (state.expandedLocationKeys.has(locKey)) {
+              const mapDiv = document.createElement("div");
+              mapDiv.id = "mini-map-" + locKey.replace(/[^a-zA-Z0-9]/g, "_");
+              mapDiv.style.cssText = "height:160px; border-radius:10px; overflow:hidden; margin-top:8px; border:1px solid var(--border);";
+              row.appendChild(mapDiv);
+              const stale = document.createElement("div");
+              stale.style.cssText = "font-size:11px; color:var(--text-dim); margin-top:6px;";
+              stale.textContent = "Last updated " + timeAgo(bus.loc.at);
+              row.appendChild(stale);
+              setTimeout(() => initMiniMap(mapDiv.id, bus.loc.lat, bus.loc.lng, bus.guideName || ("Bus " + bus.num)), 0);
+            }
+          }
         });
+        renderNotBoardedToggle(card, run);
         results.appendChild(card);
       });
     }
@@ -2336,6 +2713,11 @@
     refreshBtn.onclick = async () => { state.currentRun = await loadRun(run.runId); updateLiveParts(); };
     screen.appendChild(refreshBtn);
 
+    const editManifestBtn = document.createElement("button");
+    editManifestBtn.className = "btn btn-secondary"; editManifestBtn.style.marginBottom = "16px"; editManifestBtn.textContent = "\u270F\uFE0F Edit Manifest";
+    editManifestBtn.onclick = () => go("coord-manifest-edit");
+    screen.appendChild(editManifestBtn);
+
     const exportHeading = document.createElement("h2"); exportHeading.textContent = "Export to Master Tracker"; exportHeading.style.marginTop = "12px";
     screen.appendChild(exportHeading);
     const exportNote = document.createElement("p");
@@ -2424,6 +2806,121 @@
   }
 
   // ---------- Coordinator: single-bus detail (contact + passenger list) ----------
+  // ---------- Coordinator: edit manifest mid-run (add / remove passengers) ----------
+  function renderCoordManifestEdit() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Manifest", () => go("coord-run-detail")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Edit Manifest</h2>`;
+
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.textContent = "Safe to edit any time, even mid-run. Adding names never affects anyone already boarded. Removing an already-boarded passenger asks for confirmation first.";
+    screen.appendChild(banner);
+
+    const statsHolder = document.createElement("div");
+    screen.appendChild(statsHolder);
+
+    const addHeading = document.createElement("h3");
+    addHeading.textContent = "Add passengers";
+    screen.appendChild(addHeading);
+    const addArea = document.createElement("textarea");
+    addArea.placeholder = "One name per line\u2026";
+    screen.appendChild(addArea);
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn btn-primary"; addBtn.style.marginTop = "10px"; addBtn.textContent = "Add to manifest";
+    addBtn.onclick = async () => {
+      const names = addArea.value.split("\n").map(n => n.trim()).filter(Boolean);
+      if (!names.length) { showToast("Enter at least one name"); return; }
+      const fresh = await loadRun(run.runId);
+      const stamp = Date.now();
+      names.forEach((name, i) => {
+        fresh.manifest.push({ id: run.runId + "-add-" + stamp + "-" + i, name, boarded: false, busNum: null, boardedAt: null });
+      });
+      await saveRun(fresh);
+      state.currentRun = fresh;
+      addArea.value = "";
+      showToast(names.length + " passenger(s) added");
+      renderList();
+    };
+    screen.appendChild(addBtn);
+
+    const removeHeading = document.createElement("h3");
+    removeHeading.textContent = "Remove passengers";
+    screen.appendChild(removeHeading);
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Search the manifest to remove someone\u2026";
+    screen.appendChild(searchInput);
+    const listHolder = document.createElement("div");
+    listHolder.style.marginTop = "12px";
+    screen.appendChild(listHolder);
+
+    function updateStats() {
+      const total = state.currentRun.manifest.length;
+      const boarded = totalBoarded(state.currentRun);
+      statsHolder.innerHTML = "";
+      const strip = document.createElement("div");
+      strip.className = "stat-strip";
+      strip.innerHTML = `<div class="stat-box"><div class="num">${total}</div><div class="lbl">Total</div></div>
+        <div class="stat-box"><div class="num">${boarded}</div><div class="lbl">Boarded</div></div>
+        <div class="stat-box"><div class="num">${total - boarded}</div><div class="lbl">Not boarded</div></div>`;
+      statsHolder.appendChild(strip);
+    }
+
+    async function removePerson(personId, personName, isBoarded, busNum) {
+      if (isBoarded) {
+        const ok = confirm(personName + " has already boarded Bus " + busNum + ". Removing them will also remove them from that bus's boarded count. Continue?");
+        if (!ok) return;
+      } else {
+        const ok = confirm("Remove " + personName + " from the manifest?");
+        if (!ok) return;
+      }
+      const fresh = await loadRun(run.runId);
+      fresh.manifest = fresh.manifest.filter(p => p.id !== personId);
+      await saveRun(fresh);
+      state.currentRun = fresh;
+      showToast(personName + " removed");
+      renderList();
+    }
+
+    function renderList() {
+      const q = searchInput.value.trim().toLowerCase();
+      const list = state.currentRun.manifest
+        .filter(p => !q || p.name.toLowerCase().includes(q))
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name));
+      listHolder.innerHTML = "";
+      if (!list.length) { listHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No matches.</div>`; return; }
+      list.slice(0, 100).forEach(p => {
+        const row = document.createElement("div");
+        row.className = "card";
+        row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:12px 14px; margin-bottom:8px;";
+        const info = document.createElement("div");
+        info.innerHTML = `<div style="font-size:14.5px;">${esc(p.name)}</div>${p.boarded ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Boarded \u2014 Bus ${p.busNum}</div>` : `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Not yet boarded</div>`}`;
+        const delBtn = document.createElement("button");
+        delBtn.className = "roster-del"; delBtn.textContent = "\u2715";
+        delBtn.onclick = () => removePerson(p.id, p.name, p.boarded, p.busNum);
+        row.appendChild(info); row.appendChild(delBtn);
+        listHolder.appendChild(row);
+      });
+      if (list.length > 100) {
+        const more = document.createElement("p");
+        more.className = "subtitle"; more.style.fontSize = "12px";
+        more.textContent = (list.length - 100) + " more \u2014 narrow your search to see them.";
+        listHolder.appendChild(more);
+      }
+    }
+    searchInput.oninput = renderList;
+
+    updateStats();
+    renderList();
+    c.appendChild(screen);
+    return c;
+  }
+
   function renderCoordBusDetail() {
     const run = state.currentRun;
     const busNum = state.currentBusNum;
@@ -2474,6 +2971,12 @@
             <div class="overview-label">Email</div>
             <div class="overview-value">${email ? `<a href="mailto:${esc(email)}" style="color:var(--brand); text-decoration:none;">\u2709\uFE0F ${esc(email)}</a>` : "\u2014 not on file"}</div>
           </div>`;
+        const life360Row = document.createElement("a");
+        life360Row.href = "https://www.life360.com/";
+        life360Row.target = "_blank"; life360Row.rel = "noopener noreferrer";
+        life360Row.style.cssText = "display:block; margin-top:12px; text-align:center; text-decoration:none;";
+        life360Row.innerHTML = `<button class="btn btn-secondary" type="button">\u{1F4CD} Open Life360</button>`;
+        contactCard.appendChild(life360Row);
       }
       bodyHolder.appendChild(contactCard);
 
@@ -2593,6 +3096,20 @@
     }
   }
   function destroyMap() { if (mapInstance) { mapInstance.remove(); mapInstance = null; mapMarkers = {}; } }
+
+  // Small, self-contained single-marker map used by Courtesy Flow / Help Desk
+  // "View live location" toggles. Each call gets a fresh Leaflet instance since
+  // the surrounding card is fully rebuilt on every poll/refresh anyway.
+  function initMiniMap(containerId, lat, lng, label) {
+    if (typeof L === "undefined") return;
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    try {
+      const map = L.map(el, { attributionControl: false, zoomControl: false }).setView([lat, lng], 14);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18 }).addTo(map);
+      L.marker([lat, lng]).addTo(map).bindPopup(esc(label)).openPopup();
+    } catch (e) { console.warn("mini map init failed", e); }
+  }
 
   // ---------- Coordinator: settings ----------
   function esc(s) {
