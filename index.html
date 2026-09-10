@@ -208,7 +208,7 @@
     "Allentown Airport (ABE)", "Stewart International Airport (SWF)", "LGA", "JFK Terminal 8",
   ];
   const ORIGINS = DESTINATIONS.filter(d => d !== "LGA" && d !== "JFK Terminal 8");
-  const COORD_SESSION_MS = 10 * 60 * 1000; // stay signed in for 10 minutes of inactivity
+  const AUTH_SESSION_MS = 60 * 60 * 1000; // stay signed in for 60 minutes of inactivity — applies to every role, not just the coordinator
   function getChecklistItems(run) {
     const items = [
       { key: "guideArrived", question: "Has the guide arrived at the staging location?", short: "Guide arrived at staging" },
@@ -241,6 +241,10 @@
     courtesySelectedDestination: null,
     editingGuideIndex: null,
     coordAuthedAt: null,
+    guideAuthedAt: null,
+    courtesyName: null,
+    courtesyAuthedAt: null,
+    helpdeskAuthedAt: null,
     expandedLocationKeys: new Set(),
     expandedNotBoardedKeys: new Set(),
     courtesyMode: "arrival",
@@ -452,7 +456,7 @@
     // If the session has expired, drop back to the password screen instead of
     // whatever coordinator screen was requested.
     if (COORD_VIEWS.has(state.view)) {
-      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < COORD_SESSION_MS) {
+      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < AUTH_SESSION_MS) {
         state.coordAuthedAt = Date.now();
       } else {
         state.coordAuthedAt = null;
@@ -520,13 +524,24 @@
     const guideCard = document.createElement("button");
     guideCard.className = "role-card";
     guideCard.innerHTML = `<div class="kicker">Field</div><div class="title">I'm a Bus Guide</div><div class="desc">Enter your PIN, pick your run and bus, then check riders off the manifest.</div>`;
-    guideCard.onclick = () => { state.role = "guide"; state.pinInput = ""; go("guide-pin"); };
+    guideCard.onclick = async () => {
+      state.role = "guide"; state.pinInput = "";
+      if (state.guideName && state.guideAuthedAt && Date.now() - state.guideAuthedAt < AUTH_SESSION_MS) {
+        state.guideAuthedAt = Date.now();
+        const roster = await loadRoster();
+        const match = roster.find(g => g.pin === state.guidePin) || { name: state.guideName, lastRunId: null, lastBusNum: null };
+        await proceedToGuideHome(match);
+      } else {
+        state.guideName = ""; state.guidePin = ""; state.guideAuthedAt = null;
+        go("guide-pin");
+      }
+    };
     const coordCard = document.createElement("button");
     coordCard.className = "role-card";
     coordCard.innerHTML = `<div class="kicker">Dispatch</div><div class="title">I'm the Coordinator</div><div class="desc">Create runs, manage guide PINs, and watch live boarding, ETAs, and location.</div>`;
     coordCard.onclick = () => {
       state.role = "coordinator"; state.pinInput = "";
-      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < COORD_SESSION_MS) {
+      if (state.coordAuthedAt && Date.now() - state.coordAuthedAt < AUTH_SESSION_MS) {
         state.coordAuthedAt = Date.now();
         state.coordTab = state.coordTab || "dashboard";
         go("coord-home");
@@ -538,11 +553,31 @@
     const courtesyCard = document.createElement("button");
     courtesyCard.className = "role-card";
     courtesyCard.innerHTML = `<div class="kicker">Reception</div><div class="title">Courtesy Flow</div><div class="desc">See every inbound bus grouped by destination, with live ETAs. Individual PIN required.</div>`;
-    courtesyCard.onclick = () => { state.courtesyPinInput = ""; go("courtesy-pin"); };
+    courtesyCard.onclick = () => {
+      state.courtesyPinInput = "";
+      if (state.courtesyName && state.courtesyAuthedAt && Date.now() - state.courtesyAuthedAt < AUTH_SESSION_MS) {
+        state.courtesyAuthedAt = Date.now();
+        state.courtesySelectedDestination = null;
+        go("courtesy-home");
+      } else {
+        state.courtesyName = null; state.courtesyAuthedAt = null;
+        go("courtesy-pin");
+      }
+    };
     const helpdeskCard = document.createElement("button");
     helpdeskCard.className = "role-card";
     helpdeskCard.innerHTML = `<div class="kicker">Support</div><div class="title">Help Desk</div><div class="desc">Look up a passenger, a bus guide, or a Run ID. Shared PIN required.</div>`;
-    helpdeskCard.onclick = () => { state.helpdeskPinInput = ""; go("helpdesk-pin"); };
+    helpdeskCard.onclick = () => {
+      state.helpdeskPinInput = "";
+      if (state.helpdeskAuthedAt && Date.now() - state.helpdeskAuthedAt < AUTH_SESSION_MS) {
+        state.helpdeskAuthedAt = Date.now();
+        state.helpdeskTab = state.helpdeskTab || "arrivals";
+        go("helpdesk-home");
+      } else {
+        state.helpdeskAuthedAt = null;
+        go("helpdesk-pin");
+      }
+    };
     grid.appendChild(guideCard); grid.appendChild(coordCard); grid.appendChild(courtesyCard); grid.appendChild(helpdeskCard);
     screen.appendChild(grid); c.appendChild(screen);
     return c;
@@ -575,6 +610,32 @@
     return c;
   }
 
+  // Shared between a fresh PIN login and a remembered (within-session) return,
+  // so both paths land the guide in exactly the same place: resume an active
+  // bus if they have one, otherwise their run list.
+  async function proceedToGuideHome(match) {
+    if (match.lastRunId && match.lastBusNum) {
+      const run = await loadRun(match.lastRunId);
+      const bus = run && run.buses.find(b => b.num === match.lastBusNum);
+      if (run && bus) {
+        state.currentRun = run;
+        state.guideBus = match.lastBusNum;
+        go("guide-manifest");
+        startPolling(async () => {
+          if (state.view !== "guide-manifest") return;
+          const latest = await loadRun(run.runId);
+          if (latest) { state.currentRun = latest; refreshManifestLive(); }
+        }, 4000);
+        startEtaWatcher();
+        return;
+      }
+    }
+    await loadIndex();
+    state.guideBus = null;
+    go("guide-run-select");
+    startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
+  }
+
   function renderGuidePin() {
     const c = document.createElement("div");
     c.appendChild(topbar("Bus Guide", () => go("role-select")));
@@ -595,32 +656,10 @@
       if (!match) { showToast("PIN not recognized \u2014 check with your coordinator"); return; }
       state.guideName = match.name;
       state.guidePin = match.pin;
-
-      const proceed = async () => {
-        if (match.lastRunId && match.lastBusNum) {
-          const run = await loadRun(match.lastRunId);
-          const bus = run && run.buses.find(b => b.num === match.lastBusNum);
-          if (run && bus) {
-            state.currentRun = run;
-            state.guideBus = match.lastBusNum;
-            go("guide-manifest");
-            startPolling(async () => {
-              if (state.view !== "guide-manifest") return;
-              const latest = await loadRun(run.runId);
-              if (latest) { state.currentRun = latest; refreshManifestLive(); }
-            }, 4000);
-            startEtaWatcher();
-            return;
-          }
-        }
-        await loadIndex();
-        state.guideBus = null;
-        go("guide-run-select");
-        startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
-      };
+      state.guideAuthedAt = Date.now();
 
       state.welcomeName = match.name;
-      state.welcomeNext = proceed;
+      state.welcomeNext = () => proceedToGuideHome(match);
       go("welcome");
     };
     screen.appendChild(btn);
@@ -2083,6 +2122,8 @@
       btn.onclick = () => {
         const match = roster.find(p => p.pin === input.value);
         if (!match) { showToast("PIN not recognized \u2014 check with your coordinator"); return; }
+        state.courtesyName = match.name;
+        state.courtesyAuthedAt = Date.now();
         state.welcomeName = match.name;
         state.welcomeNext = () => { state.courtesySelectedDestination = null; go("courtesy-home"); };
         go("welcome");
@@ -2151,6 +2192,7 @@
       btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
       btn.onclick = () => {
         if (input.value !== pin) { showToast("Incorrect PIN"); return; }
+        state.helpdeskAuthedAt = Date.now();
         state.helpdeskTab = "arrivals";
         go("helpdesk-home");
       };
