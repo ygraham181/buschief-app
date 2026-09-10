@@ -209,6 +209,7 @@
     "LGA", "JFK Terminal 8",
   ];
   const ORIGINS = DESTINATIONS.filter(d => d !== "JFK Terminal 8"); // LGA is allowed as an origin too — only JFK T8 stays destination-only
+  const HALL_NAMES = new Set(["Westfield Hall", "New York Hall"]); // the only two locations Courtesy Flow's Arrival to Hall tab should ever show
   const AUTH_SESSION_MS = 60 * 60 * 1000; // stay signed in for 60 minutes of inactivity — applies to every role, not just the coordinator
   function getChecklistItems(run) {
     const items = [
@@ -241,6 +242,7 @@
     currentBusNum: null,
     coordTab: "dashboard",
     courtesySelectedDestination: null,
+    courtesySelectedDay: null,
     editingGuideIndex: null,
     coordAuthedAt: null,
     guideAuthedAt: null,
@@ -693,9 +695,6 @@
     }
 
     (async () => {
-      // Re-read the index here so a transient failure is caught by THIS screen,
-      // and never shown as "no runs assigned" — that message must only ever
-      // mean the database genuinely has nothing for this guide.
       lastReadFailed = false;
       await loadIndex();
       if (lastReadFailed) {
@@ -717,40 +716,59 @@
         return;
       }
       const fullRuns = (await Promise.all(myEntries.map(e => loadRun(e.runId)))).filter(Boolean);
-      const active = [], previous = [];
-      fullRuns.forEach(run => {
-        const myBuses = run.buses.filter(b => b.guideName === state.guideName);
-        const allDone = myBuses.length > 0 && myBuses.every(b => b.status === "Completed");
-        (allDone ? previous : active).push(run);
-      });
-      active.sort((a, b) => a.runId.localeCompare(b.runId));
-      previous.sort((a, b) => a.runId.localeCompare(b.runId));
-
-      if (!active.length && !previous.length) {
+      if (!fullRuns.length) {
         holder.innerHTML = `<div class="empty-state"><div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.</div>`;
         return;
       }
 
-      const activeHeading = document.createElement("h3");
-      activeHeading.textContent = "Active Runs";
-      holder.appendChild(activeHeading);
-      if (active.length) active.forEach(r => holder.appendChild(runCard(r)));
-      else holder.innerHTML += `<div class="empty-state" style="padding:16px 0;">Nothing active right now.</div>`;
+      // Group by date first — a guide working multiple days of the event
+      // should see each day's runs separately, not one long mixed list.
+      const byDate = {};
+      fullRuns.forEach(run => {
+        const key = run.date || "";
+        if (!byDate[key]) byDate[key] = [];
+        byDate[key].push(run);
+      });
+      const dateKeys = Object.keys(byDate).sort(); // "" (undated) sorts first, then chronological
+      const todayStr = new Date().toISOString().slice(0, 10);
 
-      if (previous.length) {
-        const prevHeading = document.createElement("h3");
-        prevHeading.textContent = "Previous Runs";
-        holder.appendChild(prevHeading);
-        const prevNote = document.createElement("p");
-        prevNote.className = "subtitle"; prevNote.style.fontSize = "12px"; prevNote.style.marginTop = "-4px";
-        prevNote.textContent = "Completed \u2014 kept here for reference, no longer live.";
-        holder.appendChild(prevNote);
-        previous.forEach(r => {
-          const card = runCard(r);
-          card.style.opacity = "0.6";
-          holder.appendChild(card);
+      dateKeys.forEach(dateKey => {
+        const dateHeading = document.createElement("h2");
+        dateHeading.style.cssText = "margin-top:22px; display:flex; align-items:center; gap:8px;";
+        dateHeading.textContent = formatDateLabel(dateKey);
+        if (dateKey === todayStr) {
+          const todayTag = document.createElement("span");
+          todayTag.style.cssText = "font-size:10px; font-weight:700; color:#fff; background:var(--brand); padding:2px 8px; border-radius:4px;";
+          todayTag.textContent = "TODAY";
+          dateHeading.appendChild(todayTag);
+        }
+        holder.appendChild(dateHeading);
+
+        const dayRuns = byDate[dateKey];
+        const active = [], previous = [];
+        dayRuns.forEach(run => {
+          const myBuses = run.buses.filter(b => b.guideName === state.guideName);
+          const allDone = myBuses.length > 0 && myBuses.every(b => b.status === "Completed");
+          (allDone ? previous : active).push(run);
         });
-      }
+        active.sort((a, b) => a.runId.localeCompare(b.runId));
+        previous.sort((a, b) => a.runId.localeCompare(b.runId));
+
+        if (active.length) active.forEach(r => holder.appendChild(runCard(r)));
+        else holder.innerHTML += `<div class="empty-state" style="padding:12px 0;">Nothing active this day.</div>`;
+
+        if (previous.length) {
+          const prevNote = document.createElement("p");
+          prevNote.className = "subtitle"; prevNote.style.fontSize = "12px"; prevNote.style.margin = "10px 0 4px";
+          prevNote.textContent = "Completed that day:";
+          holder.appendChild(prevNote);
+          previous.forEach(r => {
+            const card = runCard(r);
+            card.style.opacity = "0.6";
+            holder.appendChild(card);
+          });
+        }
+      });
     })();
 
     return c;
@@ -808,20 +826,25 @@
         <div class="overview-label">Catering</div>
         <div class="overview-value">${run.catering ? "Yes \u2014 " + esc(run.cateringDetails || "details TBD") : "No catering on this run"}</div>
       </div>
-      <div class="overview-row">
-        <div class="overview-label">1. Beginning of run</div>
-        <div class="overview-value">${run.announceBefore ? esc(run.announceBefore) : "\u2014 nothing set"}</div>
-      </div>
-      <div class="overview-row">
-        <div class="overview-label">2. During the run</div>
-        <div class="overview-value">${run.announceDuring ? esc(run.announceDuring) : "\u2014 nothing set"}</div>
-      </div>
-      <div class="overview-row">
-        <div class="overview-label">3. Upon arrival</div>
-        <div class="overview-value">${run.announceArrival ? esc(run.announceArrival) : "\u2014 nothing set"}</div>
-      </div>
     `;
     screen.appendChild(card);
+
+    // Full Beginning/During/Arrival preview — everything the guide will see
+    // once they start, available here ahead of time. No live status yet, so
+    // it opens on "Beginning" and the guide can freely tap through all three.
+    const phaseHeading = document.createElement("h3");
+    phaseHeading.textContent = "Beginning / During / Arrival";
+    phaseHeading.style.marginTop = "18px";
+    screen.appendChild(phaseHeading);
+    const phaseCard = buildPhaseTabsCard(run, { currentPhase: null });
+    if (phaseCard) {
+      screen.appendChild(phaseCard);
+    } else {
+      const none = document.createElement("p");
+      none.className = "subtitle";
+      none.textContent = "Nothing set for this run yet.";
+      screen.appendChild(none);
+    }
 
     const busLabel = document.createElement("h3");
     busLabel.textContent = "Buses on this run";
@@ -1716,7 +1739,6 @@
 
     if (!runs.length) {
       if (lastReadFailed) {
-        // The index/read failed — do NOT tell the coordinator there are no runs.
         wrap.innerHTML = `<div class="empty-state"><div class="big">\u26A0\uFE0F</div>Couldn't load runs from the database.<br/>Check your connection.</div>`;
         const retry = document.createElement("button");
         retry.className = "btn btn-primary"; retry.style.marginTop = "14px"; retry.textContent = "Try again";
@@ -2039,7 +2061,7 @@
       const btn = document.createElement("button");
       btn.className = "tab-btn" + (state.courtesyMode === m.id ? " active" : "");
       btn.textContent = m.label;
-      btn.onclick = () => { state.courtesyMode = m.id; state.courtesySelectedDestination = null; render(); };
+      btn.onclick = () => { state.courtesyMode = m.id; state.courtesySelectedDestination = null; state.courtesySelectedDay = null; render(); };
       modeBar.appendChild(btn);
     });
     wrap.appendChild(modeBar);
@@ -2051,14 +2073,20 @@
 
     const field = state.courtesyMode === "departure" ? "origin" : "destination";
     const verb = state.courtesyMode === "departure" ? "departing" : "arriving";
-    const groups = groupRunsByLocation(runs, field);
+    // Arrival to Hall is specifically about guests arriving at one of the two
+    // halls — airport destinations (buses heading out to a terminal) never
+    // belong here, so they're filtered out before grouping, not just hidden.
+    const groupableRuns = state.courtesyMode === "arrival"
+      ? runs.filter(r => HALL_NAMES.has((r.destination || "").trim()))
+      : runs;
+    const groups = groupRunsByLocation(groupableRuns, field);
     const locKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
 
     if (state.courtesySelectedDestination && groups[state.courtesySelectedDestination]) {
       const g = groups[state.courtesySelectedDestination];
       const backBtn = document.createElement("button");
       backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All locations";
-      backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
+      backBtn.onclick = () => { state.courtesySelectedDestination = null; state.courtesySelectedDay = null; render(); };
       wrap.appendChild(backBtn);
 
       const heading = document.createElement("h2");
@@ -2122,19 +2150,46 @@
       sub.textContent = "Every bus heading here, soonest arrival first.";
       wrap.appendChild(sub);
 
+      // Day toggle — Courtesy Flow's arrival view spans the whole event, so
+      // break it down by day rather than showing every day's buses at once.
+      let dayEntries = g.entries;
+      if (state.courtesyMode === "arrival") {
+        const days = Array.from(new Set(g.entries.map(e => e.run.date || ""))).sort();
+        if (days.length > 1) {
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (!state.courtesySelectedDay || !days.includes(state.courtesySelectedDay)) {
+            state.courtesySelectedDay = days.includes(todayStr) ? todayStr : days[0];
+          }
+          const dayBar = document.createElement("div");
+          dayBar.style.cssText = "display:flex; gap:6px; margin-bottom:14px; overflow-x:auto; padding-bottom:2px;";
+          days.forEach(day => {
+            const dayBtn = document.createElement("button");
+            const isSel = day === state.courtesySelectedDay;
+            dayBtn.style.cssText = "flex:0 0 auto; padding:8px 14px; font-size:12.5px; font-weight:700; border-radius:20px; border:1px solid var(--border); cursor:pointer; white-space:nowrap;" +
+              (isSel ? " background:var(--brand); color:#fff; border-color:var(--brand);" : " background:var(--panel-alt); color:var(--text);");
+            dayBtn.textContent = formatDateLabel(day);
+            dayBtn.onclick = () => { state.courtesySelectedDay = day; render(); };
+            dayBar.appendChild(dayBtn);
+          });
+          wrap.appendChild(dayBar);
+          dayEntries = g.entries.filter(e => (e.run.date || "") === state.courtesySelectedDay);
+        }
+      }
+
       const priority = { "In Route": 0, "At Staging": 1, "Not Started": 2, "Completed": 3 };
-      const sorted = g.entries.slice().sort((a, b) => {
+      const sorted = dayEntries.slice().sort((a, b) => {
         const pa = priority[a.bus.status], pb = priority[b.bus.status];
         if (pa !== pb) return pa - pb;
         const ea = a.bus.eta || Infinity, eb = b.bus.eta || Infinity;
         return ea - eb;
       });
       if (!sorted.length) {
-        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination.</div>`;
+        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination${state.courtesyMode === "arrival" && state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
       }
       sorted.forEach(({ run, bus }) => {
         const pax = busBoardedCount(run, bus.num);
-        const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
+        const liveEtaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+        const plannedText = formatPlannedTime(run.plannedArrival);
         const guide = bus.guideName ? roster.find(g2 => g2.name === bus.guideName) : null;
         const card = document.createElement("div");
         card.className = "card";
@@ -2144,7 +2199,8 @@
           </div>
           <div class="stat-strip" style="margin:12px 0 8px;">
             <div class="stat-box"><div class="num">${pax}</div><div class="lbl">Passengers</div></div>
-            <div class="stat-box"><div class="num" style="font-size:16px;">${etaText}</div><div class="lbl">ETA</div></div>
+            <div class="stat-box"><div class="num" style="font-size:15px;">${plannedText || "\u2014"}</div><div class="lbl">Planned ETA</div></div>
+            <div class="stat-box"><div class="num" style="font-size:15px; ${liveEtaText ? "color:var(--green);" : ""}">${liveEtaText || "Not live yet"}</div><div class="lbl">Live ETA</div></div>
           </div>
           ${bus.guideName ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">${contactLinksHtml(guide)}</div>` : ""}
           ${run.busCompany ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}`;
@@ -2216,7 +2272,7 @@
           <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} ${verb}</div></div>
           <div class="chev">\u203A</div></div>
         ${metaLine}`;
-      btn.onclick = () => { state.courtesySelectedDestination = key; render(); };
+      btn.onclick = () => { state.courtesySelectedDestination = key; state.courtesySelectedDay = null; render(); };
       card.appendChild(btn);
       wrap.appendChild(card);
     });
@@ -2260,7 +2316,7 @@
         state.courtesyName = match.name;
         state.courtesyAuthedAt = Date.now();
         state.welcomeName = match.name;
-        state.welcomeNext = () => { state.courtesySelectedDestination = null; go("courtesy-home"); };
+        state.welcomeNext = () => { state.courtesySelectedDestination = null; state.courtesySelectedDay = null; go("courtesy-home"); };
         go("welcome");
       };
       holder.appendChild(btn);
@@ -2271,7 +2327,7 @@
   // ---------- Standalone Courtesy Flow role (shared PIN, no individual login) ----------
   function renderCourtesyHome() {
     const c = document.createElement("div");
-    c.appendChild(topbar("Courtesy Flow", () => { stopPolling(); state.courtesySelectedDestination = null; go("role-select"); }));
+    c.appendChild(topbar("Courtesy Flow", () => { stopPolling(); state.courtesySelectedDestination = null; state.courtesySelectedDay = null; go("role-select"); }));
     const screen = document.createElement("div");
     screen.className = "screen";
     const holder = document.createElement("div");
@@ -2349,7 +2405,7 @@
   // ---------- Help Desk role (shared PIN): arrivals + 3-way search ----------
   function renderHelpdeskHome() {
     const c = document.createElement("div");
-    c.appendChild(topbar("Help Desk", () => { stopPolling(); state.courtesySelectedDestination = null; go("role-select"); }));
+    c.appendChild(topbar("Help Desk", () => { stopPolling(); state.courtesySelectedDestination = null; state.courtesySelectedDay = null; go("role-select"); }));
     const screen = document.createElement("div");
     screen.className = "screen";
 
@@ -2566,7 +2622,16 @@
     wrap.appendChild(runsBtnRow);
 
     const importBtn = document.createElement("button");
-    importBtn.className = "btn btn-secondary"; importBtn.style.marginBottom = "26px"; importBtn.textContent = "\u{1F4E5} Import runs from Excel";
+    importBtn.className = "btn btn-secondary"; importBtn.style.marginTop = "10px"; importBtn.textContent = "\u{1F4E5} Import runs from Excel";
+    const updateExistingRow = document.createElement("div");
+    updateExistingRow.className = "checkbox-row"; updateExistingRow.style.marginTop = "10px";
+    const updateExistingCheck = document.createElement("input"); updateExistingCheck.type = "checkbox"; updateExistingCheck.id = "update-existing-check";
+    const updateExistingLbl = document.createElement("label"); updateExistingLbl.className = "cr-label"; updateExistingLbl.setAttribute("for", "update-existing-check");
+    updateExistingLbl.textContent = "Also update manifests for runs that already exist";
+    updateExistingRow.appendChild(updateExistingCheck); updateExistingRow.appendChild(updateExistingLbl);
+    const updateExistingHint = document.createElement("p");
+    updateExistingHint.className = "subtitle"; updateExistingHint.style.marginTop = "-4px"; updateExistingHint.style.marginBottom = "18px";
+    updateExistingHint.textContent = "Matches passengers by name \u2014 adds anyone new, updates special needs on anyone already there. Never removes a passenger and never touches boarding status, even for people already checked in.";
     const fileInput = document.createElement("input");
     fileInput.type = "file"; fileInput.accept = ".xlsx,.xls,.csv"; fileInput.style.display = "none";
     fileInput.onchange = async (e) => {
@@ -2574,12 +2639,13 @@
       e.target.value = "";
       if (!f) return;
       importBtn.disabled = true; importBtn.textContent = "Importing\u2026";
-      try { await handleExcelImport(f); }
+      try { await handleExcelImport(f, updateExistingCheck.checked); }
       catch (err) { console.error(err); showToast("Import failed \u2014 check the file matches the template"); }
       importBtn.disabled = false; importBtn.textContent = "\u{1F4E5} Import runs from Excel";
     };
     importBtn.onclick = () => fileInput.click();
     wrap.appendChild(importBtn); wrap.appendChild(fileInput);
+    wrap.appendChild(updateExistingRow); wrap.appendChild(updateExistingHint);
 
     const guidesHeading = document.createElement("h2");
     guidesHeading.textContent = "Guides";
@@ -2934,13 +3000,13 @@
 
   async function downloadImportTemplate() {
     const runsData = [
-      ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company",
+      ["Run ID", "Description", "Date", "Origin", "Destination", "Planned Arrival Time", "Staging Location", "Number of Buses", "Bus Company",
        "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
        "Catering (Yes/No)", "Catering Details",
        "Procedure - Beginning of Run", "Announcement - Beginning of Run",
        "Procedure - During Run", "Announcement - During Run",
        "Procedure - Upon Arrival", "Announcement - Upon Arrival"],
-      ["RUN-001", "EWR arrivals to New York Hall", "EWR Terminal A", "New York Hall", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
+      ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "15:07", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
        "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
        "Yes", "2x breakfast boxes, bottled water",
        "Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.",
@@ -2962,9 +3028,40 @@
     XLSX.writeFile(wb, "bus_run_import_template.xlsx");
   }
 
-  async function handleExcelImport(file) {
+  // Excel date/time cells arrive as JS Date objects (cellDates:true), but a
+  // hand-typed cell arrives as a plain string — handle both without throwing.
+  function parseDateCell(v) {
+    if (!v) return "";
+    if (v instanceof Date && !isNaN(v)) {
+      return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0");
+    }
+    return String(v).trim();
+  }
+  function parseTimeCell(v) {
+    if (!v) return "";
+    if (v instanceof Date && !isNaN(v)) {
+      return String(v.getHours()).padStart(2, "0") + ":" + String(v.getMinutes()).padStart(2, "0");
+    }
+    return String(v).trim();
+  }
+  // "2026-09-16" -> "Wed, Sep 16" for the Courtesy Flow day toggle
+  function formatDateLabel(dateStr) {
+    if (!dateStr) return "Undated";
+    const d = new Date(dateStr + "T00:00:00");
+    if (isNaN(d)) return dateStr;
+    return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  }
+  function formatPlannedTime(hhmm) {
+    if (!hhmm) return "";
+    const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+    if (!m) return hhmm;
+    const d = new Date(); d.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  async function handleExcelImport(file, updateExisting) {
     const buf = await file.arrayBuffer();
-    const workbook = XLSX.read(buf, { type: "array" });
+    const workbook = XLSX.read(buf, { type: "array", cellDates: true });
     const runsSheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "runs");
     const manifestSheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "manifest");
     if (!runsSheetName) { showToast('No "Runs" tab found \u2014 check against the template'); return; }
@@ -2983,11 +3080,42 @@
       manifestByRun[rid].push({ name, specialNeeds });
     });
 
-    let created = 0, skipped = 0, unmatchedGuides = new Set(), unmatchedLocations = new Set();
+    let created = 0, skipped = 0, manifestsUpdated = 0, passengersAdded = 0, passengersUpdated = 0;
+    let unmatchedGuides = new Set(), unmatchedLocations = new Set();
     for (const row of runsRows) {
       const runId = String(row["Run ID"] || "").trim();
       if (!runId) continue;
-      if (state.runIndex.some(r => r.runId === runId)) { skipped++; continue; }
+      if (state.runIndex.some(r => r.runId === runId)) {
+        if (!updateExisting) { skipped++; continue; }
+        // Update mode: merge new/changed passengers into the existing run's
+        // manifest by name match. Never touch boarded/busNum/boardedAt on an
+        // existing entry, and never remove anyone not in the new sheet —
+        // a bulk re-import should only ever ADD information, never take it away.
+        const people = manifestByRun[runId] || [];
+        if (!people.length) { skipped++; continue; }
+        let added = 0, updated = 0;
+        const result = await mutateRun(runId, (fresh) => {
+          added = 0; updated = 0; // reset on every transaction attempt, including retries
+          people.forEach(p => {
+            const existing = fresh.manifest.find(m => m.name.toLowerCase() === p.name.toLowerCase());
+            if (existing) {
+              const newFlag = !!p.specialNeeds;
+              const newNote = p.specialNeeds || "";
+              if (existing.specialNeeds !== newFlag || existing.specialNeedsNote !== newNote) {
+                existing.specialNeeds = newFlag; existing.specialNeedsNote = newNote; updated++;
+              }
+            } else {
+              fresh.manifest.push({
+                id: runId + "-imp-" + Date.now() + "-" + added, name: p.name, boarded: false, busNum: null, boardedAt: null,
+                specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "",
+              });
+              added++;
+            }
+          });
+        });
+        if (result) { manifestsUpdated++; passengersAdded += added; passengersUpdated += updated; }
+        continue;
+      }
       const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
       const people = manifestByRun[runId] || [];
       const manifest = people.map((p, i) => ({
@@ -3020,7 +3148,9 @@
       if (destRaw && !destMatch) unmatchedLocations.add("Destination: " + destRaw);
       const run = {
         runId, description: String(row["Description"] || "").trim(),
+        date: parseDateCell(row["Date"]),
         origin: originMatch || originRaw, destination: destMatch || destRaw,
+        plannedArrival: parseTimeCell(row["Planned Arrival Time"]) || null,
         stagingLocation: String(row["Staging Location"] || "").trim(),
         busCompany: companyMatch || companyRaw,
         catering: ["yes", "y", "true"].includes(cateringVal),
@@ -3040,6 +3170,7 @@
     await setJSON("run-index", state.runIndex);
     showToast(
       created + " run(s) imported" +
+      (manifestsUpdated ? ", " + manifestsUpdated + " existing run(s) updated (" + passengersAdded + " added, " + passengersUpdated + " changed)" : "") +
       (skipped ? ", " + skipped + " skipped (duplicate ID)" : "") +
       (unmatchedGuides.size ? ", " + unmatchedGuides.size + " guide name(s) not found in roster" : "") +
       (unmatchedLocations.size ? ", " + unmatchedLocations.size + " location(s) didn't match the fixed list" : "")
@@ -3061,7 +3192,7 @@
 
   async function handleGuideExcelImport(file) {
     const buf = await file.arrayBuffer();
-    const workbook = XLSX.read(buf, { type: "array" });
+    const workbook = XLSX.read(buf, { type: "array", cellDates: true });
     const sheetName = workbook.SheetNames.find(n => n.trim().toLowerCase() === "guides") || workbook.SheetNames[0];
     const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
 
@@ -3105,6 +3236,8 @@
     const runIdInput = document.createElement("input"); runIdInput.type = "text"; runIdInput.value = "RUN-" + nextNum;
     const descLabel = document.createElement("label"); descLabel.textContent = "Description";
     const descInput = document.createElement("input"); descInput.type = "text"; descInput.placeholder = "e.g. JFK arrivals \u2192 Marriott Marquis";
+    const dateLabel = document.createElement("label"); dateLabel.textContent = "Date";
+    const dateInput = document.createElement("input"); dateInput.type = "date";
     const originLabel = document.createElement("label"); originLabel.textContent = "Origin";
     const originInput = document.createElement("select");
     const originBlankOpt = document.createElement("option");
@@ -3125,6 +3258,11 @@
       opt.value = name; opt.textContent = name;
       destInput.appendChild(opt);
     });
+    const plannedArrivalLabel = document.createElement("label"); plannedArrivalLabel.textContent = "Planned arrival time \u2014 optional";
+    const plannedArrivalHint = document.createElement("p");
+    plannedArrivalHint.className = "subtitle"; plannedArrivalHint.style.marginTop = "-8px";
+    plannedArrivalHint.textContent = "The scheduled arrival time from route planning \u2014 shown to Courtesy Flow and Help Desk before a guide sets a live ETA, and alongside it afterward.";
+    const plannedArrivalInput = document.createElement("input"); plannedArrivalInput.type = "time";
     const stageLabel = document.createElement("label"); stageLabel.textContent = "Staging location";
     const stageInput = document.createElement("input"); stageInput.type = "text"; stageInput.placeholder = "e.g. JFK Cell Phone Lot";
     const busLabel = document.createElement("label"); busLabel.textContent = "Number of buses";
@@ -3140,7 +3278,8 @@
       companySelect.appendChild(opt);
     });
 
-    [runIdLabel, runIdInput, descLabel, descInput, originLabel, originInput, destLabel, destInput,
+    [runIdLabel, runIdInput, descLabel, descInput, dateLabel, dateInput, originLabel, originInput, destLabel, destInput,
+     plannedArrivalLabel, plannedArrivalHint, plannedArrivalInput,
      stageLabel, stageInput, busLabel, busInput, companyLabel, companySelect].forEach(el => screen.appendChild(el));
 
     // ---- Per-bus guide assignment, rebuilt dynamically as "Number of buses" changes ----
@@ -3211,16 +3350,30 @@
     };
 
     const announceHeading = document.createElement("h3");
-    announceHeading.textContent = "Announcements";
+    announceHeading.textContent = "Beginning / During / Arrival";
     announceHeading.style.marginTop = "18px";
     const announceHint = document.createElement("p");
     announceHint.className = "subtitle"; announceHint.style.marginTop = "-6px";
-    announceHint.textContent = "Shown to the guide at the matching stage of their run \u2014 all optional.";
-    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run (before the bus departs)";
+    announceHint.textContent = "For each stage: the guide's own procedure (what to do \u2014 never read aloud) and the passenger script (what to say). Both optional. The guide sees these at the matching stage of their run, and can preview any stage ahead of time.";
+
+    const procBeforeLabel = document.createElement("label"); procBeforeLabel.textContent = "1. Beginning of run \u2014 guide procedure";
+    const procBeforeInput = document.createElement("textarea"); procBeforeInput.placeholder = "e.g. Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.";
+    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run \u2014 passenger script";
+    announceBeforeLabel.style.marginTop = "10px";
     const announceBeforeInput = document.createElement("textarea"); announceBeforeInput.placeholder = "e.g. Welcome aboard! Please have your badge visible for the driver.";
-    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run (while in transit)";
+
+    const procDuringLabel = document.createElement("label"); procDuringLabel.textContent = "2. During the run \u2014 guide procedure";
+    procDuringLabel.style.marginTop = "16px";
+    const procDuringInput = document.createElement("textarea"); procDuringInput.placeholder = "e.g. Keep the app open and location tracking on. Post the ETA in the Bus Guide Chat after departure.";
+    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run \u2014 passenger script";
+    announceDuringLabel.style.marginTop = "10px";
     const announceDuringInput = document.createElement("textarea"); announceDuringInput.placeholder = "e.g. Restrooms are at the back. Estimated travel time is 25 minutes.";
-    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival at destination";
+
+    const procArrivalLabel = document.createElement("label"); procArrivalLabel.textContent = "3. Upon arrival \u2014 guide procedure";
+    procArrivalLabel.style.marginTop = "16px";
+    const procArrivalInput = document.createElement("textarea"); procArrivalInput.placeholder = "e.g. Help unload luggage. Collect trash and dispose of it on site. Mark the drop-off complete.";
+    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival \u2014 passenger script";
+    announceArrivalLabel.style.marginTop = "10px";
     const announceArrivalInput = document.createElement("textarea"); announceArrivalInput.placeholder = "e.g. Please take all belongings. Follow signage to registration.";
 
     const manifestLabel = document.createElement("label"); manifestLabel.textContent = "Passenger manifest \u2014 one name per line";
@@ -3234,9 +3387,9 @@
 
     [cateringRow, cateringDetailsLabel, cateringDetailsInput,
      announceHeading, announceHint,
-     announceBeforeLabel, announceBeforeInput,
-     announceDuringLabel, announceDuringInput,
-     announceArrivalLabel, announceArrivalInput,
+     procBeforeLabel, procBeforeInput, announceBeforeLabel, announceBeforeInput,
+     procDuringLabel, procDuringInput, announceDuringLabel, announceDuringInput,
+     procArrivalLabel, procArrivalInput, announceArrivalLabel, announceArrivalInput,
      manifestLabel, manifestArea,
      specialNeedsLabel, specialNeedsHint, specialNeedsArea].forEach(el => screen.appendChild(el));
 
@@ -3278,8 +3431,10 @@
         };
       });
       const run = {
-        runId, description: descInput.value.trim(), origin: originInput.value.trim(), destination: destInput.value.trim(),
+        runId, description: descInput.value.trim(), date: dateInput.value, origin: originInput.value.trim(), destination: destInput.value.trim(),
+        plannedArrival: plannedArrivalInput.value || null,
         stagingLocation: stageInput.value.trim(), busCompany: companySelect.value, catering: cateringCheck.checked, cateringDetails: cateringDetailsInput.value.trim(),
+        procedureBefore: procBeforeInput.value.trim(), procedureDuring: procDuringInput.value.trim(), procedureArrival: procArrivalInput.value.trim(),
         announceBefore: announceBeforeInput.value.trim(), announceDuring: announceDuringInput.value.trim(), announceArrival: announceArrivalInput.value.trim(),
         numBuses, buses, manifest, createdAt: Date.now(),
       };
@@ -3600,25 +3755,43 @@
     c.appendChild(topbar(run.runId + " \u00b7 Announcements", () => go("coord-run-detail")));
     const screen = document.createElement("div");
     screen.className = "screen";
-    screen.innerHTML = `<h2>Edit Announcements / Notes</h2>`;
+    screen.innerHTML = `<h2>Edit Beginning / During / Arrival</h2>`;
     const banner = document.createElement("div");
     banner.className = "banner";
     banner.textContent = "Safe to edit any time, even mid-run. Every guide on this run sees the update the next time their app refreshes.";
     screen.appendChild(banner);
 
-    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run (before the bus departs)";
+    const procBeforeLabel = document.createElement("label"); procBeforeLabel.textContent = "1. Beginning of run \u2014 guide procedure";
+    const procBeforeArea = document.createElement("textarea");
+    procBeforeArea.value = run.procedureBefore || "";
+    screen.appendChild(procBeforeLabel); screen.appendChild(procBeforeArea);
+
+    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run \u2014 passenger script";
+    announceBeforeLabel.style.marginTop = "10px";
     const announceBeforeArea = document.createElement("textarea");
     announceBeforeArea.value = run.announceBefore || "";
     screen.appendChild(announceBeforeLabel); screen.appendChild(announceBeforeArea);
 
-    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run (while in transit)";
-    announceDuringLabel.style.marginTop = "16px";
+    const procDuringLabel = document.createElement("label"); procDuringLabel.textContent = "2. During the run \u2014 guide procedure";
+    procDuringLabel.style.marginTop = "16px";
+    const procDuringArea = document.createElement("textarea");
+    procDuringArea.value = run.procedureDuring || "";
+    screen.appendChild(procDuringLabel); screen.appendChild(procDuringArea);
+
+    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run \u2014 passenger script";
+    announceDuringLabel.style.marginTop = "10px";
     const announceDuringArea = document.createElement("textarea");
     announceDuringArea.value = run.announceDuring || "";
     screen.appendChild(announceDuringLabel); screen.appendChild(announceDuringArea);
 
-    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival at destination";
-    announceArrivalLabel.style.marginTop = "16px";
+    const procArrivalLabel = document.createElement("label"); procArrivalLabel.textContent = "3. Upon arrival \u2014 guide procedure";
+    procArrivalLabel.style.marginTop = "16px";
+    const procArrivalArea = document.createElement("textarea");
+    procArrivalArea.value = run.procedureArrival || "";
+    screen.appendChild(procArrivalLabel); screen.appendChild(procArrivalArea);
+
+    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival \u2014 passenger script";
+    announceArrivalLabel.style.marginTop = "10px";
     const announceArrivalArea = document.createElement("textarea");
     announceArrivalArea.value = run.announceArrival || "";
     screen.appendChild(announceArrivalLabel); screen.appendChild(announceArrivalArea);
@@ -3632,11 +3805,17 @@
     const saveBtn = document.createElement("button");
     saveBtn.className = "btn btn-primary"; saveBtn.style.marginTop = "16px"; saveBtn.textContent = "Save changes";
     saveBtn.onclick = async () => {
+      const procBeforeVal = procBeforeArea.value.trim();
+      const procDuringVal = procDuringArea.value.trim();
+      const procArrivalVal = procArrivalArea.value.trim();
       const beforeVal = announceBeforeArea.value.trim();
       const duringVal = announceDuringArea.value.trim();
       const arrivalVal = announceArrivalArea.value.trim();
       const cateringVal = cateringArea.value.trim();
       const updated = await mutateRun(run.runId, (fresh) => {
+        fresh.procedureBefore = procBeforeVal;
+        fresh.procedureDuring = procDuringVal;
+        fresh.procedureArrival = procArrivalVal;
         fresh.announceBefore = beforeVal;
         fresh.announceDuring = duringVal;
         fresh.announceArrival = arrivalVal;
