@@ -2695,11 +2695,11 @@
     updateExistingRow.className = "checkbox-row"; updateExistingRow.style.marginTop = "10px";
     const updateExistingCheck = document.createElement("input"); updateExistingCheck.type = "checkbox"; updateExistingCheck.id = "update-existing-check";
     const updateExistingLbl = document.createElement("label"); updateExistingLbl.className = "cr-label"; updateExistingLbl.setAttribute("for", "update-existing-check");
-    updateExistingLbl.textContent = "Also update manifests for runs that already exist";
+    updateExistingLbl.textContent = "Also refresh route details and manifests for runs that already exist";
     updateExistingRow.appendChild(updateExistingCheck); updateExistingRow.appendChild(updateExistingLbl);
     const updateExistingHint = document.createElement("p");
     updateExistingHint.className = "subtitle"; updateExistingHint.style.marginTop = "-4px"; updateExistingHint.style.marginBottom = "18px";
-    updateExistingHint.textContent = "Matches passengers by name \u2014 adds anyone new, updates special needs on anyone already there. Never removes a passenger and never touches boarding status, even for people already checked in.";
+    updateExistingHint.textContent = "Refreshes planning details (times, staging, catering, procedures, scripts) and merges the manifest by name \u2014 adds anyone new, updates special needs on anyone already there. Never touches a bus's live status, guide assignment, or a passenger's boarded state, even for people already checked in.";
     const fileInput = document.createElement("input");
     fileInput.type = "file"; fileInput.accept = ".xlsx,.xls,.csv"; fileInput.style.display = "none";
     fileInput.onchange = async (e) => {
@@ -3148,23 +3148,56 @@
       manifestByRun[rid].push({ name, specialNeeds });
     });
 
-    let created = 0, skipped = 0, manifestsUpdated = 0, passengersAdded = 0, passengersUpdated = 0;
+    let created = 0, skipped = 0, manifestsUpdated = 0, passengersAdded = 0, passengersUpdated = 0, routeDetailsUpdated = 0;
     const newIndexEntries = [];
     let unmatchedGuides = new Set(), unmatchedLocations = new Set();
     for (const row of runsRows) {
       const runId = String(row["Run ID"] || "").trim();
       if (!runId) continue;
+
+      // Parsed once, used whether this run is brand new or already exists —
+      // route-level details (never bus status, never boarding) should refresh
+      // from the sheet either way.
+      const cateringVal = String(row["Catering (Yes/No)"] || row["Catering"] || "").trim().toLowerCase();
+      const companyRaw = String(row["Bus Company"] || "").trim();
+      const companyMatch = BUS_COMPANIES.find(c => c.toLowerCase() === companyRaw.toLowerCase());
+      const originRaw = String(row["Origin"] || "").trim();
+      const originMatch = ORIGINS.find(o => o.toLowerCase() === originRaw.toLowerCase());
+      const destRaw = String(row["Destination"] || "").trim();
+      const destMatch = DESTINATIONS.find(d => d.toLowerCase() === destRaw.toLowerCase());
+      if (originRaw && !originMatch) unmatchedLocations.add("Origin: " + originRaw);
+      if (destRaw && !destMatch) unmatchedLocations.add("Destination: " + destRaw);
+      const routeDetails = {
+        description: String(row["Description"] || "").trim(),
+        date: parseDateCell(row["Date"]),
+        origin: originMatch || originRaw, destination: destMatch || destRaw,
+        plannedArrival: parseTimeCell(row["Planned Arrival Time"]) || null,
+        stagingLocation: String(row["Staging Location"] || "").trim(),
+        busCompany: companyMatch || companyRaw,
+        catering: ["yes", "y", "true"].includes(cateringVal),
+        cateringDetails: String(row["Catering Details"] || "").trim(),
+        procedureBefore: String(row["Procedure - Beginning of Run"] || "").trim(),
+        announceBefore: String(row["Announcement - Beginning of Run"] || "").trim(),
+        procedureDuring: String(row["Procedure - During Run"] || "").trim(),
+        announceDuring: String(row["Announcement - During Run"] || "").trim(),
+        procedureArrival: String(row["Procedure - Upon Arrival"] || "").trim(),
+        announceArrival: String(row["Announcement - Upon Arrival"] || "").trim(),
+      };
+
       if (state.runIndex.some(r => r.runId === runId)) {
         if (!updateExisting) { skipped++; continue; }
-        // Update mode: merge new/changed passengers into the existing run's
-        // manifest by name match. Never touch boarded/busNum/boardedAt on an
-        // existing entry, and never remove anyone not in the new sheet —
-        // a bulk re-import should only ever ADD information, never take it away.
+        // Update mode: refresh route-level details (description, date, origin,
+        // destination, planned arrival, staging, catering, procedures, scripts)
+        // from the sheet, and merge new/changed passengers into the manifest by
+        // name match. Never touch each bus's live status, guide assignment,
+        // departure/completion timestamps, or a manifest entry's boarded state —
+        // a bulk re-import should only ever refresh planning details, never
+        // disturb anything that's actually happening live.
         const people = manifestByRun[runId] || [];
-        if (!people.length) { skipped++; continue; }
         let added = 0, updated = 0;
         const result = await mutateRun(runId, (fresh) => {
           added = 0; updated = 0; // reset on every transaction attempt, including retries
+          Object.assign(fresh, routeDetails);
           people.forEach(p => {
             const existing = fresh.manifest.find(m => m.name.toLowerCase() === p.name.toLowerCase());
             if (existing) {
@@ -3182,7 +3215,7 @@
             }
           });
         });
-        if (result) { manifestsUpdated++; passengersAdded += added; passengersUpdated += updated; }
+        if (result) { routeDetailsUpdated++; manifestsUpdated++; passengersAdded += added; passengersUpdated += updated; }
         continue;
       }
       const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
@@ -3206,30 +3239,8 @@
           checklistBypassed: false,
         };
       });
-      const cateringVal = String(row["Catering (Yes/No)"] || row["Catering"] || "").trim().toLowerCase();
-      const companyRaw = String(row["Bus Company"] || "").trim();
-      const companyMatch = BUS_COMPANIES.find(c => c.toLowerCase() === companyRaw.toLowerCase());
-      const originRaw = String(row["Origin"] || "").trim();
-      const originMatch = ORIGINS.find(o => o.toLowerCase() === originRaw.toLowerCase());
-      const destRaw = String(row["Destination"] || "").trim();
-      const destMatch = DESTINATIONS.find(d => d.toLowerCase() === destRaw.toLowerCase());
-      if (originRaw && !originMatch) unmatchedLocations.add("Origin: " + originRaw);
-      if (destRaw && !destMatch) unmatchedLocations.add("Destination: " + destRaw);
       const run = {
-        runId, description: String(row["Description"] || "").trim(),
-        date: parseDateCell(row["Date"]),
-        origin: originMatch || originRaw, destination: destMatch || destRaw,
-        plannedArrival: parseTimeCell(row["Planned Arrival Time"]) || null,
-        stagingLocation: String(row["Staging Location"] || "").trim(),
-        busCompany: companyMatch || companyRaw,
-        catering: ["yes", "y", "true"].includes(cateringVal),
-        cateringDetails: String(row["Catering Details"] || "").trim(),
-        procedureBefore: String(row["Procedure - Beginning of Run"] || "").trim(),
-        announceBefore: String(row["Announcement - Beginning of Run"] || "").trim(),
-        procedureDuring: String(row["Procedure - During Run"] || "").trim(),
-        announceDuring: String(row["Announcement - During Run"] || "").trim(),
-        procedureArrival: String(row["Procedure - Upon Arrival"] || "").trim(),
-        announceArrival: String(row["Announcement - Upon Arrival"] || "").trim(),
+        runId, ...routeDetails,
         numBuses, buses, manifest, createdAt: Date.now(),
       };
       await saveRun(run);
@@ -3244,7 +3255,7 @@
     }
     showToast(
       created + " run(s) imported" +
-      (manifestsUpdated ? ", " + manifestsUpdated + " existing run(s) updated (" + passengersAdded + " added, " + passengersUpdated + " changed)" : "") +
+      (manifestsUpdated ? ", " + manifestsUpdated + " existing run(s) refreshed (route details + " + passengersAdded + " passenger(s) added, " + passengersUpdated + " changed)" : "") +
       (skipped ? ", " + skipped + " skipped (duplicate ID)" : "") +
       (unmatchedGuides.size ? ", " + unmatchedGuides.size + " guide name(s) not found in roster" : "") +
       (unmatchedLocations.size ? ", " + unmatchedLocations.size + " location(s) didn't match the fixed list" : "")
