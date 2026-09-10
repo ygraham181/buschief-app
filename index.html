@@ -2184,12 +2184,34 @@
         if (!byRun[run.runId]) byRun[run.runId] = { run, buses: [] };
         byRun[run.runId].buses.push(bus);
       });
+      // Sort by whichever ETA is most trustworthy right now: a guide's live
+      // ETA once they've actually departed, falling back to the planned
+      // time otherwise. Sorting on live ETA alone was the bug here — before
+      // any bus departs, every run's live ETA is null, so the list quietly
+      // fell back to alphabetical Run ID order instead of chronological.
+      function minutesOfDay(ts) {
+        if (!ts) return null;
+        const d = new Date(ts);
+        return d.getHours() * 60 + d.getMinutes();
+      }
+      function plannedMinutes(hhmm) {
+        if (!hhmm) return null;
+        const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+        if (!m) return null;
+        return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      }
+      function effectiveEtaMinutes(entry) {
+        const liveTimes = entry.buses.map(bb => minutesOfDay(bb.eta)).filter(v => v !== null);
+        if (liveTimes.length) return Math.min(...liveTimes);
+        const planned = plannedMinutes(entry.run.plannedArrival);
+        return planned !== null ? planned : Infinity;
+      }
       const runList = Object.values(byRun).sort((a, b) => {
         const aActive = a.buses.some(bb => bb.status !== "Completed");
         const bActive = b.buses.some(bb => bb.status !== "Completed");
         if (aActive !== bActive) return aActive ? -1 : 1;
-        const aEta = Math.min(...a.buses.map(bb => bb.eta || Infinity));
-        const bEta = Math.min(...b.buses.map(bb => bb.eta || Infinity));
+        const aEta = effectiveEtaMinutes(a);
+        const bEta = effectiveEtaMinutes(b);
         if (aEta !== bEta) return aEta - bEta;
         return a.run.runId.localeCompare(b.run.runId);
       });
