@@ -2071,22 +2071,57 @@
       return wrap;
     }
 
-    const field = state.courtesyMode === "departure" ? "origin" : "destination";
-    const verb = state.courtesyMode === "departure" ? "departing" : "arriving";
-    // Arrival to Hall is specifically about guests arriving at one of the two
-    // halls — airport destinations (buses heading out to a terminal) never
-    // belong here, so they're filtered out before grouping, not just hidden.
-    const groupableRuns = state.courtesyMode === "arrival"
+    // Both modes group locations by DESTINATION — "where is this bus headed"
+    // is the useful question whether you're asking about arrivals or
+    // departures. What differs is the FILTER: Arrival only cares about buses
+    // headed to one of the two halls; Departure only cares about buses
+    // actually leaving one of the two halls (the courtesy team is based at
+    // the hall), but then shows EVERYWHERE those buses go, airports
+    // included — "whatever departure destinations are applicable."
+    const field = "destination";
+    const verb = state.courtesyMode === "departure" ? "heading out" : "arriving";
+    const scopedRuns = state.courtesyMode === "arrival"
       ? runs.filter(r => HALL_NAMES.has((r.destination || "").trim()))
-      : runs;
-    const groups = groupRunsByLocation(groupableRuns, field);
+      : runs.filter(r => HALL_NAMES.has((r.origin || "").trim()));
+
+    // Day comes FIRST, before any location — pick a day, then see only the
+    // locations that actually have buses that day. Same day-selector for
+    // both Arrival and Departure.
+    const days = Array.from(new Set(scopedRuns.map(r => r.date || ""))).sort();
+    if (days.length) {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (!state.courtesySelectedDay || !days.includes(state.courtesySelectedDay)) {
+        state.courtesySelectedDay = days.includes(todayStr) ? todayStr : days[0];
+      }
+    } else {
+      state.courtesySelectedDay = null;
+    }
+    if (days.length > 1) {
+      const dayBar = document.createElement("div");
+      dayBar.style.cssText = "display:flex; gap:6px; margin-bottom:16px; overflow-x:auto; padding-bottom:2px;";
+      days.forEach(day => {
+        const dayBtn = document.createElement("button");
+        const isSel = day === state.courtesySelectedDay;
+        dayBtn.style.cssText = "flex:0 0 auto; padding:8px 14px; font-size:12.5px; font-weight:700; border-radius:20px; border:1px solid var(--border); cursor:pointer; white-space:nowrap;" +
+          (isSel ? " background:var(--brand); color:#fff; border-color:var(--brand);" : " background:var(--panel-alt); color:var(--text);");
+        dayBtn.textContent = formatDateLabel(day);
+        dayBtn.onclick = () => { state.courtesySelectedDay = day; state.courtesySelectedDestination = null; render(); };
+        dayBar.appendChild(dayBtn);
+      });
+      wrap.appendChild(dayBar);
+    }
+
+    const dayRuns = state.courtesySelectedDay
+      ? scopedRuns.filter(r => (r.date || "") === state.courtesySelectedDay)
+      : scopedRuns;
+    const groups = groupRunsByLocation(dayRuns, field);
     const locKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
 
     if (state.courtesySelectedDestination && groups[state.courtesySelectedDestination]) {
       const g = groups[state.courtesySelectedDestination];
       const backBtn = document.createElement("button");
       backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All locations";
-      backBtn.onclick = () => { state.courtesySelectedDestination = null; state.courtesySelectedDay = null; render(); };
+      backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
       wrap.appendChild(backBtn);
 
       const heading = document.createElement("h2");
@@ -2096,7 +2131,7 @@
       if (state.courtesyMode === "departure") {
         const sub = document.createElement("p");
         sub.className = "subtitle";
-        sub.textContent = "Runs departing from here, grouped by run \u2014 buses still boarding shown first.";
+        sub.textContent = "Runs heading here, grouped by run \u2014 buses still boarding shown first.";
         wrap.appendChild(sub);
 
         const byRun = {};
@@ -2150,41 +2185,15 @@
       sub.textContent = "Every bus heading here, soonest arrival first.";
       wrap.appendChild(sub);
 
-      // Day toggle — Courtesy Flow's arrival view spans the whole event, so
-      // break it down by day rather than showing every day's buses at once.
-      let dayEntries = g.entries;
-      if (state.courtesyMode === "arrival") {
-        const days = Array.from(new Set(g.entries.map(e => e.run.date || ""))).sort();
-        if (days.length > 1) {
-          const todayStr = new Date().toISOString().slice(0, 10);
-          if (!state.courtesySelectedDay || !days.includes(state.courtesySelectedDay)) {
-            state.courtesySelectedDay = days.includes(todayStr) ? todayStr : days[0];
-          }
-          const dayBar = document.createElement("div");
-          dayBar.style.cssText = "display:flex; gap:6px; margin-bottom:14px; overflow-x:auto; padding-bottom:2px;";
-          days.forEach(day => {
-            const dayBtn = document.createElement("button");
-            const isSel = day === state.courtesySelectedDay;
-            dayBtn.style.cssText = "flex:0 0 auto; padding:8px 14px; font-size:12.5px; font-weight:700; border-radius:20px; border:1px solid var(--border); cursor:pointer; white-space:nowrap;" +
-              (isSel ? " background:var(--brand); color:#fff; border-color:var(--brand);" : " background:var(--panel-alt); color:var(--text);");
-            dayBtn.textContent = formatDateLabel(day);
-            dayBtn.onclick = () => { state.courtesySelectedDay = day; render(); };
-            dayBar.appendChild(dayBtn);
-          });
-          wrap.appendChild(dayBar);
-          dayEntries = g.entries.filter(e => (e.run.date || "") === state.courtesySelectedDay);
-        }
-      }
-
       const priority = { "In Route": 0, "At Staging": 1, "Not Started": 2, "Completed": 3 };
-      const sorted = dayEntries.slice().sort((a, b) => {
+      const sorted = g.entries.slice().sort((a, b) => {
         const pa = priority[a.bus.status], pb = priority[b.bus.status];
         if (pa !== pb) return pa - pb;
         const ea = a.bus.eta || Infinity, eb = b.bus.eta || Infinity;
         return ea - eb;
       });
       if (!sorted.length) {
-        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination${state.courtesyMode === "arrival" && state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
+        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination${state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
       }
       sorted.forEach(({ run, bus }) => {
         const pax = busBoardedCount(run, bus.num);
@@ -2238,11 +2247,13 @@
     wrap.appendChild(heading);
     const sub = document.createElement("p");
     sub.className = "subtitle";
-    sub.textContent = "Pick a location to see every bus " + verb + " there.";
+    sub.textContent = state.courtesyMode === "departure"
+      ? "Pick a destination to see every bus heading there."
+      : "Pick a location to see every bus arriving there.";
     wrap.appendChild(sub);
 
     if (!locKeys.length) {
-      wrap.innerHTML += `<div class="empty-state"><div class="big">\u{1F3E8}</div>No runs with a${state.courtesyMode === "departure" ? "n origin" : " destination"} set yet.</div>`;
+      wrap.innerHTML += `<div class="empty-state"><div class="big">\u{1F3E8}</div>No runs ${state.courtesyMode === "departure" ? "leaving the hall" : "arriving at a hall"}${state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
       return wrap;
     }
 
@@ -2272,7 +2283,7 @@
           <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} ${verb}</div></div>
           <div class="chev">\u203A</div></div>
         ${metaLine}`;
-      btn.onclick = () => { state.courtesySelectedDestination = key; state.courtesySelectedDay = null; render(); };
+      btn.onclick = () => { state.courtesySelectedDestination = key; render(); };
       card.appendChild(btn);
       wrap.appendChild(card);
     });
