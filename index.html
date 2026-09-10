@@ -11,9 +11,9 @@
 <title>Orbit BusChief</title>
 
 <!-- ============================================================ -->
-<!--  Firebase (live shared data) - REQUIRED CONFIG BELOW          -->
-<!--  Paste your own Firebase project config into FIREBASE_CONFIG  -->
-<!--  See the setup guide, Part 1, for exactly where to get this.  -->
+<!--  Firebase (live shared data) — config is already filled in    -->
+<!--  for Orbit BusChief's project. Nothing to edit here — just    -->
+<!--  deploy this file as-is on every future update.               -->
 <!-- ============================================================ -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -2297,17 +2297,15 @@
     locKeys.forEach(key => {
       const g = groups[key];
       const activeBuses = g.entries.filter(e => e.bus.status !== "Completed");
+      const runsHere = Array.from(new Map(g.entries.map(e => [e.run.runId, e.run])).values());
+      const totalPaxHere = runsHere.reduce((sum, r) => sum + r.manifest.length, 0);
       const card = document.createElement("div");
       card.className = "card";
       const btn = document.createElement("button");
       btn.className = "list-btn";
       let metaLine = "";
       if (state.courtesyMode === "departure") {
-        const runIdsHere = Array.from(new Set(g.entries.map(e => e.run.runId)));
-        const notBoardedTotal = runIdsHere.reduce((sum, rid) => {
-          const r = runs.find(rr => rr.runId === rid);
-          return sum + (r ? r.manifest.filter(p => !p.boarded).length : 0);
-        }, 0);
+        const notBoardedTotal = runsHere.reduce((sum, r) => sum + r.manifest.filter(p => !p.boarded).length, 0);
         metaLine = `<div class="bus-detail-meta" style="margin-top:8px;">${notBoardedTotal} passenger${notBoardedTotal === 1 ? "" : "s"} still need boarding</div>`;
       } else {
         const nextEta = activeBuses
@@ -2317,7 +2315,7 @@
         metaLine = nextEta ? `<div class="bus-detail-meta" style="margin-top:8px;">Next arrival: <b style="color:var(--accent);">${new Date(nextEta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b></div>` : "";
       }
       btn.innerHTML = `<div class="run-row"><div><div class="run-id">${esc(g.label)}</div>
-          <div class="run-desc">${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} ${verb}</div></div>
+          <div class="run-desc">${totalPaxHere} passenger${totalPaxHere === 1 ? "" : "s"} \u00b7 ${g.entries.length} bus${g.entries.length === 1 ? "" : "es"} total \u00b7 ${activeBuses.length} ${verb}</div></div>
           <div class="chev">\u203A</div></div>
         ${metaLine}`;
       btn.onclick = () => { state.courtesySelectedDestination = key; render(); };
