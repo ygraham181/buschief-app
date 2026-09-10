@@ -251,6 +251,7 @@
     helpdeskAuthedAt: null,
     expandedLocationKeys: new Set(),
     expandedNotBoardedKeys: new Set(),
+    expandedRunKeys: new Set(),
     courtesyMode: "arrival",
     unboardedOnly: false,
     specialNeedsOnly: false,
@@ -338,6 +339,39 @@
           resolve(finalRun);
         },
         false // don't apply an optimistic local guess before the server confirms — avoids showing a state that might get rejected
+      );
+    });
+  }
+  // Same transaction-based safety as mutateRun, but for the shared run-index
+  // list itself. This is the ONLY thing allowed to write run-index — Firebase
+  // hands mutateFn the CURRENT server value at commit time, so a stale
+  // in-memory copy (e.g. state.runIndex still [] right after a fresh page
+  // load) can never overwrite runs that already exist in the database.
+  async function mutateRunIndex(mutateFn) {
+    const key = safeKey("run-index");
+    return new Promise((resolve) => {
+      fbDb.ref(key).transaction(
+        (currentRaw) => {
+          let idx;
+          try { idx = currentRaw ? JSON.parse(currentRaw) : []; } catch (e) { idx = []; }
+          mutateFn(idx);
+          return JSON.stringify(idx);
+        },
+        (error, committed, snapshot) => {
+          if (error) {
+            console.error("mutateRunIndex transaction failed", error);
+            showToast("\u26a0\ufe0f Couldn't save that change \u2014 please try again.");
+            resolve(null);
+            return;
+          }
+          if (!committed) { resolve(null); return; }
+          const finalRaw = snapshot ? snapshot.val() : null;
+          let finalIdx = [];
+          try { finalIdx = finalRaw ? JSON.parse(finalRaw) : []; } catch (e) { finalIdx = []; }
+          state.runIndex = finalIdx;
+          resolve(finalIdx);
+        },
+        false
       );
     });
   }
@@ -441,9 +475,10 @@
     return result;
   }
   async function updateRunIndexEntry(runId, patch) {
-    const idx = await getJSON("run-index", []);
-    const i = idx.findIndex(r => r.runId === runId);
-    if (i >= 0) { idx[i] = { ...idx[i], ...patch }; await setJSON("run-index", idx); state.runIndex = idx; }
+    await mutateRunIndex(idx => {
+      const i = idx.findIndex(r => r.runId === runId);
+      if (i >= 0) idx[i] = { ...idx[i], ...patch };
+    });
   }
   function timeAgo(ts) {
     if (!ts) return "never";
@@ -1716,6 +1751,12 @@
     }
 
     async function renderCurrentTab() {
+      // Always hydrate the run index from the database first — never build
+      // any tab (Settings included) off whatever state.runIndex happens to
+      // be in memory, which could still be the empty default right after a
+      // fresh page load.
+      lastReadFailed = false;
+      await loadIndex();
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
         : [];
@@ -2128,115 +2169,111 @@
       heading.textContent = g.label;
       wrap.appendChild(heading);
 
-      if (state.courtesyMode === "departure") {
-        const sub = document.createElement("p");
-        sub.className = "subtitle";
-        sub.textContent = "Runs heading here, grouped by run \u2014 buses still boarding shown first.";
-        wrap.appendChild(sub);
-
-        const byRun = {};
-        g.entries.forEach(({ run, bus }) => {
-          if (!byRun[run.runId]) byRun[run.runId] = { run, buses: [] };
-          byRun[run.runId].buses.push(bus);
-        });
-        const runList = Object.values(byRun).sort((a, b) => {
-          const aActive = a.buses.some(b => b.status === "Not Started" || b.status === "At Staging");
-          const bActive = b.buses.some(b => b.status === "Not Started" || b.status === "At Staging");
-          if (aActive !== bActive) return aActive ? -1 : 1;
-          return a.run.runId.localeCompare(b.run.runId);
-        });
-        if (!runList.length) {
-          wrap.innerHTML += `<div class="empty-state">No runs currently departing from here.</div>`;
-        }
-        runList.forEach(({ run, buses }) => {
-          const totalPax = run.manifest.length;
-          const boardedPax = totalBoarded(run);
-          const card = document.createElement("div");
-          card.className = "card";
-          card.innerHTML = `<div class="run-row">
-              <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
-            </div>
-            <div class="stat-strip" style="margin:12px 0 8px;">
-              <div class="stat-box"><div class="num">${boardedPax}</div><div class="lbl">Boarded</div></div>
-              <div class="stat-box"><div class="num">${totalPax - boardedPax}</div><div class="lbl">Not boarded</div></div>
-              <div class="stat-box"><div class="num">${totalPax}</div><div class="lbl">Total</div></div>
-            </div>`;
-          buses.forEach(bus => {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-top:1px solid var(--border); font-size:13px;";
-            row.innerHTML = `<span>Bus ${bus.num}${bus.guideName ? " \u00b7 " + esc(bus.guideName) : ""}</span>
-              <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>`;
-            card.appendChild(row);
-          });
-          if (run.busCompany) {
-            const co = document.createElement("div");
-            co.className = "bus-detail-meta"; co.style.marginTop = "6px";
-            co.textContent = "\u{1F68C} " + run.busCompany;
-            card.appendChild(co);
-          }
-          renderNotBoardedToggle(card, run);
-          wrap.appendChild(card);
-        });
-        return wrap;
-      }
-
       const sub = document.createElement("p");
       sub.className = "subtitle";
-      sub.textContent = "Every bus heading here, soonest arrival first.";
+      sub.textContent = state.courtesyMode === "departure"
+        ? "Runs heading here, grouped by run with the full passenger count \u2014 tap a run to see its buses."
+        : "Runs arriving here, grouped by run with the full passenger count \u2014 tap a run to see its buses.";
       wrap.appendChild(sub);
 
-      const priority = { "In Route": 0, "At Staging": 1, "Not Started": 2, "Completed": 3 };
-      const sorted = g.entries.slice().sort((a, b) => {
-        const pa = priority[a.bus.status], pb = priority[b.bus.status];
-        if (pa !== pb) return pa - pb;
-        const ea = a.bus.eta || Infinity, eb = b.bus.eta || Infinity;
-        return ea - eb;
+      // Grouped by RUN, not by individual bus — a run with 3 buses and 120
+      // passengers should read as ONE line ("120 passengers"), with the
+      // buses themselves tucked behind a tap so the list stays scannable.
+      const byRun = {};
+      g.entries.forEach(({ run, bus }) => {
+        if (!byRun[run.runId]) byRun[run.runId] = { run, buses: [] };
+        byRun[run.runId].buses.push(bus);
       });
-      if (!sorted.length) {
-        wrap.innerHTML += `<div class="empty-state">No buses currently assigned to this destination${state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
+      const runList = Object.values(byRun).sort((a, b) => {
+        const aActive = a.buses.some(bb => bb.status !== "Completed");
+        const bActive = b.buses.some(bb => bb.status !== "Completed");
+        if (aActive !== bActive) return aActive ? -1 : 1;
+        const aEta = Math.min(...a.buses.map(bb => bb.eta || Infinity));
+        const bEta = Math.min(...b.buses.map(bb => bb.eta || Infinity));
+        if (aEta !== bEta) return aEta - bEta;
+        return a.run.runId.localeCompare(b.run.runId);
+      });
+      if (!runList.length) {
+        wrap.innerHTML += `<div class="empty-state">No runs ${state.courtesyMode === "departure" ? "currently departing from" : "currently assigned to"} here${state.courtesySelectedDay ? " on " + formatDateLabel(state.courtesySelectedDay) : ""}.</div>`;
       }
-      sorted.forEach(({ run, bus }) => {
-        const pax = busBoardedCount(run, bus.num);
-        const liveEtaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+      runList.forEach(({ run, buses }) => {
+        const totalPax = run.manifest.length;
         const plannedText = formatPlannedTime(run.plannedArrival);
-        const guide = bus.guideName ? roster.find(g2 => g2.name === bus.guideName) : null;
+        const runKey = run.runId;
+        const isExpanded = state.expandedRunKeys.has(runKey);
         const card = document.createElement("div");
         card.className = "card";
-        card.innerHTML = `<div class="run-row">
-            <div><div class="run-id">${esc(run.runId)} \u00b7 Bus ${bus.num}${bus.guideName ? " \u00b7 " + esc(bus.guideName) : ""}</div><div class="run-desc">${esc(run.description || "")}</div></div>
-            <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
+        const headerBtn = document.createElement("button");
+        headerBtn.className = "list-btn";
+        headerBtn.innerHTML = `<div class="run-row">
+            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            <div class="chev" style="transform:rotate(${isExpanded ? "90deg" : "0deg"});">\u203A</div>
           </div>
-          <div class="stat-strip" style="margin:12px 0 8px;">
-            <div class="stat-box"><div class="num">${pax}</div><div class="lbl">Passengers</div></div>
+          <div class="stat-strip" style="margin:12px 0 0;">
+            <div class="stat-box"><div class="num">${totalPax}</div><div class="lbl">Passengers</div></div>
+            <div class="stat-box"><div class="num">${buses.length}</div><div class="lbl">Bus${buses.length === 1 ? "" : "es"}</div></div>
             <div class="stat-box"><div class="num" style="font-size:15px;">${plannedText || "\u2014"}</div><div class="lbl">Planned ETA</div></div>
-            <div class="stat-box"><div class="num" style="font-size:15px; ${liveEtaText ? "color:var(--green);" : ""}">${liveEtaText || "Not live yet"}</div><div class="lbl">Live ETA</div></div>
-          </div>
-          ${bus.guideName ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">${contactLinksHtml(guide)}</div>` : ""}
-          ${run.busCompany ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:13px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}`;
-        if (bus.loc) {
-          const locKey = run.runId + "-" + bus.num;
-          const locBtn = document.createElement("button");
-          locBtn.className = "link-btn";
-          locBtn.style.marginTop = "8px";
-          locBtn.textContent = (state.expandedLocationKeys.has(locKey) ? "\u{1F4CD} Hide live location" : "\u{1F4CD} View live location");
-          locBtn.onclick = () => {
-            if (state.expandedLocationKeys.has(locKey)) state.expandedLocationKeys.delete(locKey);
-            else state.expandedLocationKeys.add(locKey);
-            render();
-          };
-          card.appendChild(locBtn);
-          if (state.expandedLocationKeys.has(locKey)) {
-            const mapDiv = document.createElement("div");
-            mapDiv.id = "mini-map-" + locKey.replace(/[^a-zA-Z0-9]/g, "_");
-            mapDiv.style.cssText = "height:180px; border-radius:10px; overflow:hidden; margin-top:10px; border:1px solid var(--border);";
-            const staleness = document.createElement("div");
-            staleness.style.cssText = "font-size:11px; color:var(--text-dim); margin-top:6px;";
-            staleness.textContent = "Last updated " + timeAgo(bus.loc.at);
-            card.appendChild(mapDiv);
-            card.appendChild(staleness);
-            setTimeout(() => initMiniMap(mapDiv.id, bus.loc.lat, bus.loc.lng, bus.guideName || ("Bus " + bus.num)), 0);
-          }
+          </div>`;
+        headerBtn.onclick = () => {
+          if (isExpanded) state.expandedRunKeys.delete(runKey); else state.expandedRunKeys.add(runKey);
+          render();
+        };
+        card.appendChild(headerBtn);
+
+        if (isExpanded) {
+          const busList = document.createElement("div");
+          busList.style.cssText = "margin-top:10px; padding-top:10px; border-top:1px solid var(--border);";
+          buses.forEach(bus => {
+            const liveEtaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+            const guide = bus.guideName ? roster.find(g2 => g2.name === bus.guideName) : null;
+            const busRow = document.createElement("div");
+            busRow.style.cssText = "padding:10px 0; border-top:1px solid var(--border);";
+            busRow.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-weight:600; font-size:13.5px;">Bus ${bus.num}${bus.guideName ? " \u00b7 " + esc(bus.guideName) : ""}</span>
+                <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
+              </div>
+              <div style="display:flex; gap:16px; margin-top:6px; font-size:12.5px; color:var(--text-dim);">
+                <span>Planned: <b style="color:var(--text);">${plannedText || "\u2014"}</b></span>
+                <span>Live: <b style="color:${liveEtaText ? "var(--green)" : "var(--text-dim)"};">${liveEtaText || "Not live yet"}</b></span>
+              </div>
+              ${bus.guideName ? `<div class="bus-detail-meta" style="margin-top:4px; font-size:12.5px;">${contactLinksHtml(guide)}</div>` : ""}`;
+            if (bus.loc) {
+              const locKey = run.runId + "-" + bus.num;
+              const locBtn = document.createElement("button");
+              locBtn.className = "link-btn";
+              locBtn.style.cssText = "margin-top:6px; font-size:12px;";
+              locBtn.textContent = (state.expandedLocationKeys.has(locKey) ? "\u{1F4CD} Hide live location" : "\u{1F4CD} View live location");
+              locBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (state.expandedLocationKeys.has(locKey)) state.expandedLocationKeys.delete(locKey);
+                else state.expandedLocationKeys.add(locKey);
+                render();
+              };
+              busRow.appendChild(locBtn);
+              if (state.expandedLocationKeys.has(locKey)) {
+                const mapDiv = document.createElement("div");
+                mapDiv.id = "mini-map-" + locKey.replace(/[^a-zA-Z0-9]/g, "_");
+                mapDiv.style.cssText = "height:160px; border-radius:10px; overflow:hidden; margin-top:8px; border:1px solid var(--border);";
+                const staleness = document.createElement("div");
+                staleness.style.cssText = "font-size:11px; color:var(--text-dim); margin-top:6px;";
+                staleness.textContent = "Last updated " + timeAgo(bus.loc.at);
+                busRow.appendChild(mapDiv);
+                busRow.appendChild(staleness);
+                setTimeout(() => initMiniMap(mapDiv.id, bus.loc.lat, bus.loc.lng, bus.guideName || ("Bus " + bus.num)), 0);
+              }
+            }
+            busList.appendChild(busRow);
+          });
+          card.appendChild(busList);
         }
+
+        if (run.busCompany) {
+          const co = document.createElement("div");
+          co.className = "bus-detail-meta"; co.style.marginTop = "10px";
+          co.textContent = "\u{1F68C} " + run.busCompany;
+          card.appendChild(co);
+        }
+        renderNotBoardedToggle(card, run);
         wrap.appendChild(card);
       });
       return wrap;
@@ -3092,6 +3129,7 @@
     });
 
     let created = 0, skipped = 0, manifestsUpdated = 0, passengersAdded = 0, passengersUpdated = 0;
+    const newIndexEntries = [];
     let unmatchedGuides = new Set(), unmatchedLocations = new Set();
     for (const row of runsRows) {
       const runId = String(row["Run ID"] || "").trim();
@@ -3175,10 +3213,15 @@
         numBuses, buses, manifest, createdAt: Date.now(),
       };
       await saveRun(run);
-      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
+      newIndexEntries.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
       created++;
     }
-    await setJSON("run-index", state.runIndex);
+    // Append to whatever the CURRENT run-index actually is at write time —
+    // never trust the in-memory state.runIndex, which may still be empty
+    // if this is the first thing the coordinator did after a fresh load.
+    if (newIndexEntries.length) {
+      await mutateRunIndex(idx => { newIndexEntries.forEach(e => idx.push(e)); });
+    }
     showToast(
       created + " run(s) imported" +
       (manifestsUpdated ? ", " + manifestsUpdated + " existing run(s) updated (" + passengersAdded + " added, " + passengersUpdated + " changed)" : "") +
@@ -3451,8 +3494,11 @@
       };
       createBtn.disabled = true; createBtn.textContent = "Creating\u2026";
       await saveRun(run);
-      state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
-      await setJSON("run-index", state.runIndex);
+      // Append to the CURRENT run-index at write time, not the in-memory
+      // copy — if this is the very first thing done after a fresh reload,
+      // state.runIndex may still be empty and would otherwise wipe every
+      // other run's entry out of the index.
+      await mutateRunIndex(idx => { idx.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) }); });
       let msg = "Run " + runId + " created";
       if (unmatchedNames > 0) msg += " \u2014 " + unmatchedNames + " special needs name(s) didn't match the manifest";
       if (unmatchedSpecialNeeds > 0) msg += " \u2014 " + unmatchedSpecialNeeds + " special needs line(s) missing a colon, skipped";
@@ -3542,8 +3588,13 @@
     deleteBtn.className = "btn btn-danger"; deleteBtn.style.marginTop = "24px"; deleteBtn.textContent = "Delete this run";
     deleteBtn.onclick = async () => {
       if (!confirm("Delete " + run.runId + "? This can't be undone.")) return;
-      state.runIndex = state.runIndex.filter(r => r.runId !== run.runId);
-      await setJSON("run-index", state.runIndex);
+      // Remove from the CURRENT run-index at write time, not the in-memory
+      // copy — same reasoning as run creation: never trust a possibly-stale
+      // state.runIndex with a write that replaces the whole list.
+      await mutateRunIndex(idx => {
+        const i = idx.findIndex(r => r.runId === run.runId);
+        if (i >= 0) idx.splice(i, 1);
+      });
       await deleteKey("run-" + run.runId);
       destroyMap(); go("coord-home");
     };
