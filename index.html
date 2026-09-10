@@ -3,12 +3,12 @@
 <!-- ============================================================ -->
 <link rel="manifest" href="./manifest.json" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#12161b" />
+<meta name="theme-color" content="#16284D" />
 <link rel="icon" href="./icon-192.png" />
 <link rel="apple-touch-icon" href="./icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<title>BusChief</title>
+<title>Orbit BusChief</title>
 
 <!-- ============================================================ -->
 <!--  Firebase (live shared data) - REQUIRED CONFIG BELOW          -->
@@ -17,6 +17,7 @@
 <!-- ============================================================ -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
   const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBcm_ppVHDsoXDQv0USPKr_xesytKAuREc",
@@ -29,6 +30,15 @@
   };
   firebase.initializeApp(FIREBASE_CONFIG);
   const fbDb = firebase.database();
+  window.__authReady = new Promise((resolve) => {
+    firebase.auth().onAuthStateChanged((user) => {
+      if (user) { resolve(user); return; }
+      firebase.auth().signInAnonymously().catch((e) => {
+        console.error("anonymous sign-in failed", e);
+        resolve(null);
+      });
+    });
+  });
 </script>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
@@ -37,25 +47,26 @@
 <div id="app-root"></div>
 <style>
   :root {
-    --bg: #12161b;
-    --panel: #1a2129;
-    --panel-alt: #212a33;
-    --border: #2b3540;
-    --text: #eef1f4;
-    --text-dim: #8b96a3;
-    --brand: #2E6FCB;
-    --brand-hover: #4A8FE0;
-    --brand-dim: #14345c;
-    --accent: #E8963A;
-    --accent-dim: #4a3420;
-    --status-amber: #f2a93b;
-    --status-amber-dim: #4a3a1c;
-    --green: #34d399;
-    --green-dim: #16332a;
-    --blue: #4c8dff;
-    --blue-dim: #182a4a;
-    --red: #e2665a;
-    --red-dim: #3a2220;
+    /* Orbit brand palette — navy & white, extracted from official Orbit materials */
+    --bg: #F4F6F9;
+    --panel: #FFFFFF;
+    --panel-alt: #EDF0F4;
+    --border: #DCE1E8;
+    --text: #17223D;
+    --text-dim: #6B7484;
+    --brand: #16284D;
+    --brand-hover: #24396B;
+    --brand-dim: #E3E8F1;
+    --accent: #8C1515;
+    --accent-dim: #F5E2E0;
+    --status-amber: #A85D0A;
+    --status-amber-dim: #FBEEDC;
+    --green: #1C8F63;
+    --green-dim: #DFF3EA;
+    --blue: #2E6FCB;
+    --blue-dim: #E4EDFB;
+    --red: #C23B32;
+    --red-dim: #FBE6E4;
     --mono: 'Space Mono', 'SFMono-Regular', Consolas, monospace;
     --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
@@ -64,7 +75,7 @@
   .screen { max-width: 640px; margin: 0 auto; padding: 20px 18px 60px; }
   .topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; }
   .brand { display: flex; align-items: center; gap: 10px; }
-  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 3px var(--brand-dim); }
   .brand-text { font-family: var(--mono); letter-spacing: 0.06em; font-size: 13px; color: var(--text-dim); text-transform: uppercase; }
   .brand-text b { color: var(--text); }
   .back-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); font-family: var(--sans); font-size: 13px; padding: 6px 12px; border-radius: 7px; cursor: pointer; }
@@ -82,7 +93,7 @@
   .role-card .title { font-size: 19px; font-weight: 700; margin-bottom: 6px; }
   .role-card .desc { font-size: 13.5px; color: var(--text-dim); line-height: 1.5; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 16px; margin-bottom: 12px; }
-  .card:hover { border-color: #3a4552; }
+  .card:hover { border-color: #B7C0CC; }
   .list-btn { width: 100%; text-align: left; background: none; border: none; color: inherit; cursor: pointer; font-family: inherit; padding: 0; }
   .run-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .run-id { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--brand); }
@@ -143,7 +154,7 @@
   .pax-row.boarded-mine { background: var(--green-dim); border-color: var(--green); }
   .pax-row.boarded-other { opacity: 0.55; cursor: default; }
   .checkbox { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--text-dim); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-  .boarded-mine .checkbox { background: var(--green); border-color: var(--green); color: #08201a; }
+  .boarded-mine .checkbox { background: var(--green); border-color: var(--green); color: #fff; }
   .boarded-other .checkbox { background: var(--text-dim); border-color: var(--text-dim); color: var(--panel); }
   .pax-name { flex: 1; font-size: 15px; }
   .boarded-other .pax-name { text-decoration: line-through; text-decoration-color: var(--text-dim); }
@@ -185,13 +196,18 @@
   .overview-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px; }
   .overview-value { font-size: 15px; line-height: 1.5; }
   .route-arrow { color: var(--brand); font-family: var(--mono); }
-  ::placeholder { color: #5c6773; }
+  ::placeholder { color: #8891A0; }
 </style>
 
 <script>
 (function () {
   const STATUS_ORDER = ["Not Started", "At Staging", "In Route", "Completed"];
-  const BUS_COMPANIES = ["Academy Express", "Raritan Valley", "American Dream Coaches"];
+  const BUS_COMPANIES = ["Academy Express", "Yankee Line"];
+  const DESTINATIONS = [
+    "Westfield Hall", "New York Hall", "EWR Terminal A", "EWR Terminal B", "EWR Terminal C",
+    "Allentown Airport (ABE)", "Stewart International Airport (SWF)", "LGA", "JFK Terminal 8",
+  ];
+  const ORIGINS = DESTINATIONS.filter(d => d !== "LGA" && d !== "JFK Terminal 8");
   const COORD_SESSION_MS = 10 * 60 * 1000; // stay signed in for 10 minutes of inactivity
   function getChecklistItems(run) {
     const items = [
@@ -202,7 +218,7 @@
     return items;
   }
   const STATUS_CLASS = s => "status-" + s.replace(/\s+/g, "-");
-  const ETA_INTERVAL_MS = 20 * 60 * 1000;
+  const ETA_INTERVAL_MS = 15 * 60 * 1000;
   const LOC_WRITE_INTERVAL_MS = 25 * 1000;
 
   let state = {
@@ -217,6 +233,7 @@
     toast: null,
     pinInput: "",
     roster: [],
+    courtesyRoster: [],
     newGuideName: "",
     passengerSearchQuery: "",
     currentBusNum: null,
@@ -228,6 +245,7 @@
     expandedNotBoardedKeys: new Set(),
     courtesyMode: "arrival",
     unboardedOnly: false,
+    specialNeedsOnly: false,
     courtesyPinInput: "",
     forceEtaOpen: false,
     helpdeskPinInput: "",
@@ -242,13 +260,29 @@
   // Storage layer: backed by Firebase Realtime Database so every guide's
   // phone and the coordinator's dashboard read/write the same live data.
   function safeKey(key) { return key.replace(/[.#$\[\]]/g, "_"); }
-  async function getJSON(key, fallback) {
-    try {
-      const snap = await fbDb.ref(safeKey(key)).once("value");
-      if (!snap.exists()) return fallback;
-      const raw = snap.val();
-      return typeof raw === "string" ? JSON.parse(raw) : fallback;
-    } catch (e) { console.error("storage get failed", key, e); return fallback; }
+  // A read can fail transiently (weak venue signal, a phone hopping from
+  // Wi-Fi to cellular, a brief disconnect). Previously one dropped read was
+  // silently turned into an empty result, so a guide would see "No runs
+  // assigned to you" when the truth was "couldn't reach the database".
+  // Now: retry with backoff, and flag a genuine failure so screens can show
+  // "couldn't load, tap to retry" instead of a misleading empty state.
+  let lastReadFailed = false;
+  async function getJSON(key, fallback, attempts = 4) {
+    let lastErr = null;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const snap = await fbDb.ref(safeKey(key)).once("value");
+        if (!snap.exists()) return fallback;
+        const raw = snap.val();
+        return typeof raw === "string" ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        lastErr = e;
+        if (i < attempts - 1) await new Promise(r => setTimeout(r, 300 * (i + 1) + Math.random() * 300));
+      }
+    }
+    console.error("storage get failed after " + attempts + " attempts", key, lastErr);
+    lastReadFailed = true;
+    return fallback;
   }
   async function setJSON(key, val) {
     try { await fbDb.ref(safeKey(key)).set(JSON.stringify(val)); return true; }
@@ -262,12 +296,49 @@
   async function loadIndex() { state.runIndex = await getJSON("run-index", []); }
   async function loadRun(runId) { return await getJSON("run-" + runId, null); }
   async function saveRun(run) { run.updatedAt = Date.now(); await setJSON("run-" + run.runId, run); scheduleSync(run); }
+
+  // Safe concurrent-write helper — backed by Firebase's native transaction()
+  // instead of client-side check-and-retry. Firebase hands our function the
+  // CURRENT server value at the moment it actually commits, and automatically
+  // re-runs us if another guide's write landed first — so there is no gap at
+  // all where two simultaneous writers can silently clobber each other. This
+  // is enforced by the database itself, not guessed at by the app.
+  async function mutateRun(runId, mutateFn) {
+    const key = safeKey("run-" + runId);
+    return new Promise((resolve) => {
+      fbDb.ref(key).transaction(
+        (currentRaw) => {
+          if (currentRaw === null || currentRaw === undefined) return currentRaw; // run doesn't exist — abort, nothing to mutate
+          let run;
+          try { run = JSON.parse(currentRaw); } catch (e) { return currentRaw; } // corrupt value — abort rather than guess
+          mutateFn(run);
+          run.updatedAt = Date.now();
+          return JSON.stringify(run);
+        },
+        (error, committed, snapshot) => {
+          if (error) {
+            console.error("mutateRun transaction failed", runId, error);
+            showToast("\u26a0\ufe0f Couldn't save that change \u2014 please try again.");
+            resolve(null);
+            return;
+          }
+          if (!committed) { resolve(null); return; }
+          const finalRaw = snapshot ? snapshot.val() : null;
+          let finalRun = null;
+          try { finalRun = finalRaw ? JSON.parse(finalRaw) : null; } catch (e) { finalRun = null; }
+          if (finalRun) scheduleSync(finalRun);
+          resolve(finalRun);
+        },
+        false // don't apply an optimistic local guess before the server confirms — avoids showing a state that might get rejected
+      );
+    });
+  }
   async function loadRoster() { return await getJSON("guide-roster", []); }
   async function saveRoster(list) { await setJSON("guide-roster", list); }
   async function loadCoordPin() { return await getJSON("coordinator-pin", null); }
   async function saveCoordPin(pin) { await setJSON("coordinator-pin", pin); }
-  async function loadCourtesyPin() { return await getJSON("courtesy-pin", null); }
-  async function saveCourtesyPin(pin) { await setJSON("courtesy-pin", pin); }
+  async function loadCourtesyRoster() { return await getJSON("courtesy-roster", []); }
+  async function saveCourtesyRoster(list) { await setJSON("courtesy-roster", list); }
   async function loadHelpdeskPin() { return await getJSON("helpdesk-pin", null); }
   async function saveHelpdeskPin(pin) { await setJSON("helpdesk-pin", pin); }
   async function loadWebhookUrl() { return await getJSON("sheet-webhook-url", ""); }
@@ -297,7 +368,7 @@
       runId: run.runId, status: aggregateStatus(run), boarded, total,
       origin: run.origin || "", destination: run.destination || "",
       busCompany: run.busCompany || "",
-      catering: run.catering ? "Yes" : "No", notes: run.notes || "",
+      catering: run.catering ? "Yes" : "No",
       buses: run.buses.map(b => ({
         num: b.num, guideName: b.guideName || "", status: b.status,
         pax: busBoardedCount(run, b.num),
@@ -374,7 +445,7 @@
     return Math.floor(s / 3600) + "h ago";
   }
 
-  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit"]);
+  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes"]);
 
   function render() {
     // Any activity while on a coordinator screen keeps the 10-minute session alive.
@@ -401,10 +472,10 @@
       "guide-manifest": renderGuideManifest, "coord-pin": renderCoordPin,
       "coord-home": renderCoordHome, "coord-create": renderCoordCreate,
       "coord-run-detail": renderCoordRunDetail, "coord-bus-detail": renderCoordBusDetail,
-      "courtesy-home": renderCourtesyHome, "courtesy-pin": renderCourtesyPin,
+      "courtesy-home": renderCourtesyHome, "courtesy-pin": renderCourtesyPin, "welcome": renderWelcome,
       "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
       "coord-sheet-settings": renderCoordSheetSettings,
-      "coord-manifest-edit": renderCoordManifestEdit,
+      "coord-manifest-edit": renderCoordManifestEdit, "coord-edit-notes": renderCoordEditNotes,
     };
     wrap.appendChild(views[state.view]());
     root.appendChild(wrap);
@@ -420,7 +491,7 @@
     bar.className = "topbar";
     const brand = document.createElement("div");
     brand.className = "brand";
-    brand.innerHTML = '<span class="dot"></span><span class="brand-text">' + (title || 'BUSCHIEF') + '</span>';
+    brand.innerHTML = '<span class="dot"></span><span class="brand-text">' + (title || 'ORBIT BUSCHIEF') + '</span>';
     bar.appendChild(brand);
     if (onBack) {
       const btn = document.createElement("button");
@@ -436,7 +507,12 @@
     const screen = document.createElement("div");
     screen.className = "screen"; screen.style.paddingTop = "60px";
     screen.innerHTML = `
-      <div style="font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--accent); text-transform: uppercase; margin-bottom: 10px;">BusChief</div>
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
+        <span style="position:relative; display:inline-block; width:30px; height:30px; border-radius:50%; background:var(--brand); flex-shrink:0;">
+          <span style="position:absolute; top:50%; left:50%; width:15px; height:15px; margin:-7.5px 0 0 -7.5px; border-radius:50%; border:5px solid #fff; box-sizing:border-box;"></span>
+        </span>
+        <span style="font-family: var(--mono); font-size: 12px; letter-spacing: .1em; color: var(--brand); text-transform: uppercase; font-weight:700;">Orbit BusChief</span>
+      </div>
       <h1>Who's checking in?</h1>
       <p class="subtitle">Guides load a manifest, tick riders off as they board, and update bus status. Coordinators watch it all live and build the passenger runs.</p>`;
     const grid = document.createElement("div");
@@ -461,7 +537,7 @@
     };
     const courtesyCard = document.createElement("button");
     courtesyCard.className = "role-card";
-    courtesyCard.innerHTML = `<div class="kicker">Reception</div><div class="title">Courtesy Flow</div><div class="desc">See every inbound bus grouped by destination, with live ETAs. Shared PIN required.</div>`;
+    courtesyCard.innerHTML = `<div class="kicker">Reception</div><div class="title">Courtesy Flow</div><div class="desc">See every inbound bus grouped by destination, with live ETAs. Individual PIN required.</div>`;
     courtesyCard.onclick = () => { state.courtesyPinInput = ""; go("courtesy-pin"); };
     const helpdeskCard = document.createElement("button");
     helpdeskCard.className = "role-card";
@@ -473,6 +549,32 @@
   }
 
   // ---------- Guide: PIN entry (with resume) ----------
+  // ---------- Shared: post-PIN welcome screen (guides and Courtesy Flow) ----------
+  function renderWelcome() {
+    const c = document.createElement("div");
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.style.cssText = "display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:75vh; text-align:center; cursor:pointer;";
+    screen.innerHTML = `
+      <span style="position:relative; display:inline-block; width:64px; height:64px; border-radius:50%; background:var(--brand); margin-bottom:22px;">
+        <span style="position:absolute; top:50%; left:50%; width:30px; height:30px; margin:-15px 0 0 -15px; border-radius:50%; border:9px solid #fff; box-sizing:border-box;"></span>
+      </span>
+      <h1 style="margin-bottom:6px;">Welcome, ${esc(state.welcomeName || "")}!</h1>
+      <p class="subtitle">You're signed in.</p>`;
+    c.appendChild(screen);
+    let proceeded = false;
+    const proceed = () => {
+      if (proceeded) return;
+      proceeded = true;
+      const next = state.welcomeNext;
+      state.welcomeNext = null; state.welcomeName = null;
+      if (next) next();
+    };
+    screen.onclick = proceed;
+    setTimeout(proceed, 1300);
+    return c;
+  }
+
   function renderGuidePin() {
     const c = document.createElement("div");
     c.appendChild(topbar("Bus Guide", () => go("role-select")));
@@ -494,27 +596,32 @@
       state.guideName = match.name;
       state.guidePin = match.pin;
 
-      if (match.lastRunId && match.lastBusNum) {
-        const run = await loadRun(match.lastRunId);
-        const bus = run && run.buses.find(b => b.num === match.lastBusNum);
-        if (run && bus) {
-          state.currentRun = run;
-          state.guideBus = match.lastBusNum;
-          showToast("Welcome back \u2014 resuming " + run.runId + ", Bus " + match.lastBusNum);
-          go("guide-manifest");
-          startPolling(async () => {
-            if (state.view !== "guide-manifest") return;
-            const latest = await loadRun(run.runId);
-            if (latest) { state.currentRun = latest; refreshManifestLive(); }
-          }, 4000);
-          startEtaWatcher();
-          return;
+      const proceed = async () => {
+        if (match.lastRunId && match.lastBusNum) {
+          const run = await loadRun(match.lastRunId);
+          const bus = run && run.buses.find(b => b.num === match.lastBusNum);
+          if (run && bus) {
+            state.currentRun = run;
+            state.guideBus = match.lastBusNum;
+            go("guide-manifest");
+            startPolling(async () => {
+              if (state.view !== "guide-manifest") return;
+              const latest = await loadRun(run.runId);
+              if (latest) { state.currentRun = latest; refreshManifestLive(); }
+            }, 4000);
+            startEtaWatcher();
+            return;
+          }
         }
-      }
-      await loadIndex();
-      state.guideBus = null;
-      go("guide-run-select");
-      startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
+        await loadIndex();
+        state.guideBus = null;
+        go("guide-run-select");
+        startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
+      };
+
+      state.welcomeName = match.name;
+      state.welcomeNext = proceed;
+      go("welcome");
     };
     screen.appendChild(btn);
     c.appendChild(screen);
@@ -545,6 +652,23 @@
     }
 
     (async () => {
+      // Re-read the index here so a transient failure is caught by THIS screen,
+      // and never shown as "no runs assigned" — that message must only ever
+      // mean the database genuinely has nothing for this guide.
+      lastReadFailed = false;
+      await loadIndex();
+      if (lastReadFailed) {
+        holder.innerHTML = "";
+        const fail = document.createElement("div");
+        fail.className = "empty-state";
+        fail.innerHTML = `<div class="big">\u26A0\uFE0F</div>Couldn't load your runs.<br/>Check your signal, then tap to try again.`;
+        const retry = document.createElement("button");
+        retry.className = "btn btn-primary"; retry.style.marginTop = "14px"; retry.textContent = "Try again";
+        retry.onclick = () => render();
+        fail.appendChild(retry);
+        holder.appendChild(fail);
+        return;
+      }
       const myEntries = state.runIndex.filter(r => r.assignedGuides && r.assignedGuides.includes(state.guideName));
       holder.innerHTML = "";
       if (!myEntries.length) {
@@ -644,8 +768,16 @@
         <div class="overview-value">${run.catering ? "Yes \u2014 " + esc(run.cateringDetails || "details TBD") : "No catering on this run"}</div>
       </div>
       <div class="overview-row">
-        <div class="overview-label">Announcements / notes</div>
-        <div class="overview-value">${run.notes ? esc(run.notes) : "No special notes."}</div>
+        <div class="overview-label">1. Beginning of run</div>
+        <div class="overview-value">${run.announceBefore ? esc(run.announceBefore) : "\u2014 nothing set"}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">2. During the run</div>
+        <div class="overview-value">${run.announceDuring ? esc(run.announceDuring) : "\u2014 nothing set"}</div>
+      </div>
+      <div class="overview-row">
+        <div class="overview-label">3. Upon arrival</div>
+        <div class="overview-value">${run.announceArrival ? esc(run.announceArrival) : "\u2014 nothing set"}</div>
       </div>
     `;
     screen.appendChild(card);
@@ -782,10 +914,27 @@
     if (idx < STATUS_ORDER.length - 1) {
       const next = STATUS_ORDER[idx + 1];
       const btn = document.createElement("button");
-      btn.className = "btn btn-secondary"; btn.style.marginTop = "12px";
       const labelMap = { "In Route": "Mark departed / in route", "Completed": "Mark completed" };
       btn.textContent = labelMap[next] || ("Advance to " + next);
-      btn.onclick = onAdvance;
+      btn.style.marginTop = "12px";
+      if (next === "In Route") {
+        // this is the button that starts live GPS/ETA tracking — make it the
+        // clear primary action instead of blending into the dark background
+        btn.className = "btn btn-primary";
+        btn.onclick = onAdvance;
+      } else if (next === "Completed") {
+        // irreversible — GPS and live tracking stop the moment this is hit,
+        // with no way back. Require an explicit second confirmation so a
+        // stray tap can't end the run by accident.
+        btn.className = "btn btn-secondary";
+        btn.onclick = () => {
+          const sure = confirm("Mark this bus as Completed?\n\nThis stops live tracking and can't be undone \u2014 make sure the run is actually finished.");
+          if (sure) onAdvance();
+        };
+      } else {
+        btn.className = "btn btn-secondary";
+        btn.onclick = onAdvance;
+      }
       box.appendChild(btn);
     }
     return box;
@@ -798,9 +947,21 @@
     const myBus = () => state.currentRun.buses.find(b => b.num === busNum);
     state.forceEtaOpen = false;
     state.unboardedOnly = false;
+    state.specialNeedsOnly = false;
+    state.viewingChecklist = false;
 
     const c = document.createElement("div");
-    c.appendChild(topbar(run.runId + " \u00b7 Bus " + busNum, () => go("guide-setup")));
+    c.appendChild(topbar(run.runId + " \u00b7 Bus " + busNum, () => {
+      // Once this route is finished, stepping back one screen at a time
+      // through Bus Arrival / checklist / route-fork just replays a route
+      // that's already done — go straight to the run list instead.
+      if (myBus().status === "Completed") {
+        teardownGuideSession();
+        loadIndex().then(() => { go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000); });
+      } else {
+        go("guide-setup");
+      }
+    }));
     const screen = document.createElement("div");
     screen.className = "screen";
 
@@ -823,28 +984,39 @@
     function gateStage() {
       const bus = myBus();
       if (bus.status === "Not Started") return "arrival";
-      return checklistComplete() ? "none" : "checklist";
+      if (checklistComplete()) return "none";
+      return bus.checklistBypassed ? "none" : "checklist";
+    }
+
+    async function bypassChecklist() {
+      const updated = await mutateRun(run.runId, (fresh) => {
+        const bus = fresh.buses.find(b => b.num === busNum);
+        if (bus) bus.checklistBypassed = true;
+      });
+      if (updated) state.currentRun = updated;
+      renderBody();
     }
 
     async function toggleChecklistItem(key) {
-      const fresh = await loadRun(run.runId);
-      const bus = fresh.buses.find(b => b.num === busNum);
-      const newVal = !bus[key];
-      bus[key] = newVal;
-      bus[key + "At"] = newVal ? Date.now() : null;
-      // "busArrived" is its own dedicated stage that also drives the bus's tracked status
-      if (key === "busArrived") {
-        if (newVal && bus.status === "Not Started") { bus.status = "At Staging"; bus.stagingAt = Date.now(); }
-        if (!newVal && bus.status === "At Staging") { bus.status = "Not Started"; bus.stagingAt = null; }
-      }
-      await saveRun(fresh);
-      state.currentRun = fresh;
+      const updated = await mutateRun(run.runId, (fresh) => {
+        const bus = fresh.buses.find(b => b.num === busNum);
+        if (!bus) return;
+        const newVal = !bus[key];
+        bus[key] = newVal;
+        bus[key + "At"] = newVal ? Date.now() : null;
+        // "busArrived" is its own dedicated stage that also drives the bus's tracked status
+        if (key === "busArrived") {
+          if (newVal && bus.status === "Not Started") { bus.status = "At Staging"; bus.stagingAt = Date.now(); }
+          if (!newVal && bus.status === "At Staging") { bus.status = "Not Started"; bus.stagingAt = null; }
+        }
+      });
+      if (updated) state.currentRun = updated;
       renderBody();
     }
 
     function renderBody() {
       bodyHolder.innerHTML = "";
-      const stage = gateStage();
+      const stage = state.viewingChecklist ? "checklist" : gateStage();
 
       if (stage === "arrival") {
         const track = document.createElement("div");
@@ -892,6 +1064,25 @@
           card.appendChild(row);
         });
         bodyHolder.appendChild(card);
+
+        const bypassWrap = document.createElement("div");
+        bypassWrap.style.cssText = "margin-top:18px; text-align:center;";
+        if (state.viewingChecklist) {
+          const backBtn = document.createElement("button");
+          backBtn.className = "link-btn";
+          backBtn.style.fontSize = "13px";
+          backBtn.textContent = "\u2190 Back to manifest";
+          backBtn.onclick = () => { state.viewingChecklist = false; renderBody(); };
+          bypassWrap.appendChild(backBtn);
+        } else {
+          const bypassBtn = document.createElement("button");
+          bypassBtn.className = "link-btn";
+          bypassBtn.style.fontSize = "13px";
+          bypassBtn.textContent = "Not everyone's ready yet, but passengers are boarding \u2014 skip for now";
+          bypassBtn.onclick = bypassChecklist;
+          bypassWrap.appendChild(bypassBtn);
+        }
+        bodyHolder.appendChild(bypassWrap);
         return;
       }
 
@@ -900,6 +1091,21 @@
       track.className = "step-track";
       track.innerHTML = `<b>${myBus().status === "In Route" ? "In route" : myBus().status === "Completed" ? "Completed" : "Boarding"}</b>`;
       bodyHolder.appendChild(track);
+
+      if (myBus().checklistBypassed && !checklistComplete()) {
+        const items = checklistItems();
+        const bus0 = myBus();
+        const remaining = items.filter(it => !bus0[it.key]).length;
+        const bypassBanner = document.createElement("div");
+        bypassBanner.className = "banner";
+        bypassBanner.style.cssText = "border-left-color:var(--accent); background:var(--accent-dim); margin-bottom:14px;";
+        bypassBanner.innerHTML = `\u26a0\ufe0f Pre-run checklist skipped \u2014 ${remaining} item${remaining === 1 ? "" : "s"} still not confirmed. <span id="view-checklist-link" style="color:var(--accent); text-decoration:underline; cursor:pointer; font-weight:600;">Finish it</span>`;
+        bodyHolder.appendChild(bypassBanner);
+        setTimeout(() => {
+          const link = document.getElementById("view-checklist-link");
+          if (link) link.onclick = () => { state.viewingChecklist = true; renderBody(); };
+        }, 0);
+      }
 
       const gpsRow = document.createElement("div");
       gpsRow.className = "gps-status"; gpsRow.id = "gps-status-row";
@@ -923,30 +1129,103 @@
           if (bus.status === "Completed") { bus.completedAt = Date.now(); stopGeo(); await clearGuideResume(state.guidePin); }
           await saveRun(fresh);
           state.currentRun = fresh;
-          renderStepper(); renderEtaBanner(); updateGpsRow(); renderBody2Track();
+          renderStepper(); renderEtaBanner(true); updateGpsRow(); renderBody2Track(); renderSwitchRunPrompt(); renderAnnouncements();
           showToast("Bus " + busNum + " marked " + bus.status);
         }));
       }
       function renderBody2Track() { track.innerHTML = `<b>${myBus().status === "In Route" ? "In route" : myBus().status === "Completed" ? "Completed" : "Boarding"}</b>`; }
       renderStepper();
 
+      // Once a bus is Completed there's nothing left to do on this screen —
+      // make "Switch Run" the obvious, prominent next action instead of the
+      // small link at the very top being the only way forward.
+      const switchRunPromptHolder = document.createElement("div");
+      bodyHolder.appendChild(switchRunPromptHolder);
+      function renderSwitchRunPrompt() {
+        switchRunPromptHolder.innerHTML = "";
+        if (myBus().status !== "Completed") return;
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.cssText = "text-align:center; padding:20px 16px;";
+        card.innerHTML = `<div style="font-size:14px; color:var(--text-dim); margin-bottom:12px;">This route is complete. Nothing more to do here.</div>`;
+        const bigSwitchBtn = document.createElement("button");
+        bigSwitchBtn.className = "btn btn-primary";
+        bigSwitchBtn.textContent = "Switch Run";
+        bigSwitchBtn.onclick = switchLink.onclick;
+        card.appendChild(bigSwitchBtn);
+        switchRunPromptHolder.appendChild(card);
+      }
+      renderSwitchRunPrompt();
+
+      // Three announcement scripts, one per stage of the run — the one
+      // matching the bus's current status is highlighted so the guide knows
+      // exactly what to say right now without hunting through all three.
+      const announceHolder = document.createElement("div");
+      bodyHolder.appendChild(announceHolder);
+      function renderAnnouncements() {
+        announceHolder.innerHTML = "";
+        const bus = myBus();
+        const cur = state.currentRun;
+        const phase = (bus.status === "Not Started" || bus.status === "At Staging") ? "before"
+          : bus.status === "In Route" ? "during" : "arrival";
+        const sections = [
+          { key: "before", label: "1. Beginning of run", text: cur.announceBefore },
+          { key: "during", label: "2. During the run", text: cur.announceDuring },
+          { key: "arrival", label: "3. Upon arrival", text: cur.announceArrival },
+        ];
+        if (!sections.some(s => s.text)) return; // nothing set anywhere — keep the screen uncluttered
+        const heading = document.createElement("h3");
+        heading.textContent = "Announcements";
+        announceHolder.appendChild(heading);
+        const card = document.createElement("div");
+        card.className = "card"; card.style.padding = "0";
+        sections.forEach((s, i) => {
+          const isCurrent = s.key === phase;
+          const row = document.createElement("div");
+          row.style.cssText = "padding:12px 14px;" + (i > 0 ? " border-top:1px solid var(--border);" : "") +
+            (isCurrent ? " background:var(--brand-dim); border-radius:10px;" : "");
+          row.innerHTML = `<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+              <span style="font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:${isCurrent ? "var(--brand)" : "var(--text-dim)"};">${esc(s.label)}</span>
+              ${isCurrent ? '<span style="font-size:10px; font-weight:700; color:#fff; background:var(--brand); padding:2px 7px; border-radius:4px;">NOW</span>' : ""}
+            </div>
+            <div style="font-size:14px; color:${s.text ? "var(--text)" : "var(--text-dim)"};">${s.text ? esc(s.text) : "Nothing set for this stage"}</div>`;
+          card.appendChild(row);
+        });
+        announceHolder.appendChild(card);
+      }
+      renderAnnouncements();
+
       const etaHolder = document.createElement("div");
       bodyHolder.appendChild(etaHolder);
-      function renderEtaBanner() {
-        etaHolder.innerHTML = "";
+      function renderEtaBanner(force) {
         const bus = myBus();
+        // If the editable form is already showing, a background poll refresh
+        // (force=false) must not touch it — rebuilding it wipes out whatever
+        // the guide has already picked before they've hit Update. Only an
+        // explicit user action (opening, closing, or a successful submit)
+        // passes force=true and is allowed to rebuild it.
+        const currentlyExpanded = etaHolder.querySelector(".eta-banner") !== null;
+        if (!force && currentlyExpanded) return;
+        etaHolder.innerHTML = "";
         if (bus.status !== "In Route") return;
 
         if (!etaDue(bus) && !state.forceEtaOpen) {
           const compact = document.createElement("div");
-          compact.style.cssText = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; padding:10px 14px; background:var(--panel-alt); border:1px solid var(--border); border-radius:10px; font-size:12.5px; color:var(--text-dim);";
+          compact.style.cssText = "margin-bottom:16px; padding:12px 14px; background:var(--panel-alt); border:1px solid var(--border); border-radius:10px;";
           const etaText = bus.eta
             ? "ETA " + new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " \u00b7 next check-in in " + etaMinutesUntilDue(bus) + "m"
             : "No ETA set \u00b7 next check-in in " + etaMinutesUntilDue(bus) + "m";
-          compact.innerHTML = `<span>${etaText}</span>`;
+          const info = document.createElement("div");
+          info.style.cssText = "font-size:12.5px; color:var(--text-dim); margin-bottom:10px;";
+          info.textContent = etaText;
+          compact.appendChild(info);
+          // A real, unmissable button — not just a subtle link — so a guide
+          // can update their ETA the moment something changes (traffic, a
+          // delay) without waiting for the next scheduled check-in.
           const openBtn = document.createElement("button");
-          openBtn.className = "link-btn"; openBtn.textContent = "Update now";
-          openBtn.onclick = () => { state.forceEtaOpen = true; renderEtaBanner(); };
+          openBtn.className = "btn btn-secondary";
+          openBtn.textContent = "\u{1F551} Update ETA Now";
+          openBtn.onclick = () => { state.forceEtaOpen = true; renderEtaBanner(true); };
           compact.appendChild(openBtn);
           etaHolder.appendChild(compact);
           return;
@@ -992,13 +1271,15 @@
           if (ampmSel.value === "PM" && hh !== 12) hh += 12;
           if (ampmSel.value === "AM" && hh === 12) hh = 0;
           const d = new Date(); d.setHours(hh, mm, 0, 0);
-          const fresh = await loadRun(run.runId);
-          const b = fresh.buses.find(b2 => b2.num === busNum);
-          b.eta = d.getTime(); b.etaUpdatedAt = Date.now();
-          await saveRun(fresh);
-          state.currentRun = fresh;
+          const etaVal = d.getTime();
+          const updated = await mutateRun(run.runId, (fresh) => {
+            const b = fresh.buses.find(b2 => b2.num === busNum);
+            if (!b) return;
+            b.eta = etaVal; b.etaUpdatedAt = Date.now();
+          });
+          if (updated) state.currentRun = updated;
           state.forceEtaOpen = false;
-          renderEtaBanner();
+          renderEtaBanner(true);
           showToast("ETA updated");
         };
         row.appendChild(timeRow); row.appendChild(submitBtn);
@@ -1011,12 +1292,12 @@
         if (state.forceEtaOpen && !etaDue(bus)) {
           const closeBtn = document.createElement("button");
           closeBtn.className = "btn btn-ghost"; closeBtn.style.marginTop = "8px"; closeBtn.textContent = "Close";
-          closeBtn.onclick = () => { state.forceEtaOpen = false; renderEtaBanner(); };
+          closeBtn.onclick = () => { state.forceEtaOpen = false; renderEtaBanner(true); };
           banner.appendChild(closeBtn);
         }
         etaHolder.appendChild(banner);
       }
-      renderEtaBanner();
+      renderEtaBanner(true);
       updateGpsRow();
       if (myBus().status === "In Route") startGeoWatch(run.runId, busNum);
 
@@ -1056,6 +1337,24 @@
       searchWrap.appendChild(search);
       bodyHolder.appendChild(searchWrap);
 
+      const specialNeedsCount = state.currentRun.manifest.filter(p => p.specialNeeds).length;
+      if (specialNeedsCount > 0) {
+        const snWrap = document.createElement("div");
+        snWrap.style.marginBottom = "10px";
+        const snBtn = document.createElement("button");
+        snBtn.type = "button";
+        snBtn.id = "special-needs-toggle";
+        function snBtnStyle() {
+          const active = state.specialNeedsOnly;
+          snBtn.style.cssText = `width:100%; text-align:left; padding:10px 14px; border-radius:10px; cursor:pointer; border:1px solid ${active ? "var(--accent)" : "var(--border)"}; background:${active ? "var(--accent-dim)" : "var(--panel-alt)"}; color:var(--text); font-family:var(--sans); font-size:13.5px;`;
+          snBtn.innerHTML = `\u2b50 ${active ? "Showing special needs only" : "Special needs (" + specialNeedsCount + ") \u2014 tap to view"}`;
+        }
+        snBtnStyle();
+        snBtn.onclick = () => { state.specialNeedsOnly = !state.specialNeedsOnly; renderManifestList(); snBtnStyle(); };
+        snWrap.appendChild(snBtn);
+        bodyHolder.appendChild(snWrap);
+      }
+
       const listHolder = document.createElement("div");
       listHolder.className = "pax-list"; listHolder.id = "pax-list-holder";
       bodyHolder.appendChild(listHolder);
@@ -1067,6 +1366,7 @@
         const q = state.search.trim().toLowerCase();
         let filtered = state.currentRun.manifest.filter(p => !q || p.name.toLowerCase().includes(q));
         if (state.unboardedOnly) filtered = filtered.filter(p => !p.boarded);
+        if (state.specialNeedsOnly) filtered = filtered.filter(p => p.specialNeeds);
         if (!filtered.length) { holder.innerHTML = `<div class="empty-state" style="padding:30px 10px;">${state.unboardedOnly ? "Everyone's boarded! \uD83C\uDF89" : "No matches."}</div>`; return; }
         filtered.forEach(p => {
           const row = document.createElement("div");
@@ -1074,16 +1374,19 @@
           const otherRow = p.boarded && p.busNum !== busNum;
           const otherGuide = otherRow ? (state.currentRun.buses.find(b => b.num === p.busNum) || {}).guideName : null;
           row.className = "pax-row" + (mineRow ? " boarded-mine" : "") + (otherRow ? " boarded-other" : "");
-          row.innerHTML = `<div class="checkbox">${p.boarded ? "\u2713" : ""}</div><div class="pax-name">${esc(p.name)}</div>${otherRow ? `<div class="pax-tag">Bus ${p.busNum}${otherGuide ? " \u00b7 " + esc(otherGuide) : ""}</div>` : ""}`;
+          const noteHtml = (p.specialNeeds && p.specialNeedsNote)
+            ? `<div style="font-size:11px; color:var(--accent); margin-top:2px;">\u2b50 ${esc(p.specialNeedsNote)}</div>` : "";
+          row.innerHTML = `<div class="checkbox">${p.boarded ? "\u2713" : ""}</div><div class="pax-name" style="flex:1;"><div>${p.specialNeeds ? "\u2b50 " : ""}${esc(p.name)}</div>${noteHtml}</div>${otherRow ? `<div class="pax-tag">Bus ${p.busNum}${otherGuide ? " \u00b7 " + esc(otherGuide) : ""}</div>` : ""}`;
           if (!otherRow) {
             row.onclick = async () => {
-              const fresh = await loadRun(run.runId);
-              const person = fresh.manifest.find(x => x.id === p.id);
-              if (person.boarded && person.busNum === busNum) { person.boarded = false; person.busNum = null; person.boardedAt = null; }
-              else if (!person.boarded) { person.boarded = true; person.busNum = busNum; person.boardedAt = Date.now(); }
-              else return;
-              await saveRun(fresh);
-              state.currentRun = fresh;
+              const personId = p.id;
+              const updated = await mutateRun(run.runId, (fresh) => {
+                const person = fresh.manifest.find(x => x.id === personId);
+                if (!person) return;
+                if (person.boarded && person.busNum === busNum) { person.boarded = false; person.busNum = null; person.boardedAt = null; }
+                else if (!person.boarded) { person.boarded = true; person.busNum = busNum; person.boardedAt = Date.now(); }
+              });
+              if (updated) state.currentRun = updated;
               renderManifestList();
               refreshStatsDisplay();
             };
@@ -1092,7 +1395,7 @@
         });
       }
       function updateStatsInPlace() { refreshStatsDisplay(); }
-      refreshManifestLive = () => { renderManifestList(); updateStatsInPlace(); renderEtaBanner(); updateGpsRow(); };
+      refreshManifestLive = () => { renderManifestList(); updateStatsInPlace(); renderEtaBanner(); updateGpsRow(); renderAnnouncements(); };
       renderManifestList();
     }
 
@@ -1200,6 +1503,7 @@
       // an automatic rebuild would wipe out anything mid-typing, so only the
       // live-glance views (Dashboard, Courtesy Flow, Fleet Map) refresh on their own.
       if (state.coordTab === "settings" || state.coordTab === "search") return;
+      lastReadFailed = false;
       await loadIndex();
       const runs = state.runIndex.length
         ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
@@ -1237,6 +1541,15 @@
     const wrap = document.createElement("div");
 
     if (!runs.length) {
+      if (lastReadFailed) {
+        // The index/read failed — do NOT tell the coordinator there are no runs.
+        wrap.innerHTML = `<div class="empty-state"><div class="big">\u26A0\uFE0F</div>Couldn't load runs from the database.<br/>Check your connection.</div>`;
+        const retry = document.createElement("button");
+        retry.className = "btn btn-primary"; retry.style.marginTop = "14px"; retry.textContent = "Try again";
+        retry.onclick = () => { lastReadFailed = false; render(); };
+        wrap.appendChild(retry);
+        return wrap;
+      }
       wrap.innerHTML = `<div class="empty-state"><div class="big">\u{1F4CB}</div>No runs yet. Head to Settings to create one or import a batch from Excel.</div>`;
       return wrap;
     }
@@ -1747,18 +2060,18 @@
     screen.appendChild(holder);
     c.appendChild(screen);
 
-    loadCourtesyPin().then(pin => {
+    loadCourtesyRoster().then(roster => {
       holder.innerHTML = "";
-      if (!pin) {
+      if (!roster.length) {
         const h = document.createElement("h2"); h.textContent = "Courtesy Flow isn't set up yet";
         const sub = document.createElement("p"); sub.className = "subtitle";
-        sub.textContent = "No Courtesy Flow PIN has been set. Ask your coordinator to generate one from Settings, then come back here.";
+        sub.textContent = "No one's been added to the Courtesy Flow team yet. Ask your coordinator to add you from Settings, then come back here.";
         holder.appendChild(h); holder.appendChild(sub);
         return;
       }
-      const h = document.createElement("h2"); h.textContent = "Enter the Courtesy Flow PIN";
+      const h = document.createElement("h2"); h.textContent = "Enter your PIN";
       const sub = document.createElement("p"); sub.className = "subtitle";
-      sub.textContent = "One shared PIN for the whole courtesy/reception team \u2014 ask your coordinator if you don't have it.";
+      sub.textContent = "Your coordinator gave you a 4-digit PIN.";
       holder.appendChild(h); holder.appendChild(sub);
       const input = document.createElement("input");
       input.className = "pin-input"; input.type = "text"; input.inputMode = "numeric"; input.maxLength = 4;
@@ -1768,9 +2081,11 @@
       const btn = document.createElement("button");
       btn.className = "btn btn-primary"; btn.style.marginTop = "16px"; btn.textContent = "Continue";
       btn.onclick = () => {
-        if (input.value !== pin) { showToast("Incorrect PIN"); return; }
-        state.courtesySelectedDestination = null;
-        go("courtesy-home");
+        const match = roster.find(p => p.pin === input.value);
+        if (!match) { showToast("PIN not recognized \u2014 check with your coordinator"); return; }
+        state.welcomeName = match.name;
+        state.welcomeNext = () => { state.courtesySelectedDestination = null; go("courtesy-home"); };
+        go("welcome");
       };
       holder.appendChild(btn);
     });
@@ -2200,34 +2515,49 @@
     wrap.appendChild(courtesyHeading);
     const courtesySub = document.createElement("p");
     courtesySub.className = "subtitle";
-    courtesySub.textContent = "One shared PIN for anyone using the standalone Courtesy Flow view \u2014 give this to your reception/courtesy team.";
+    courtesySub.textContent = "Add each person on your reception/courtesy team below \u2014 everyone gets their own PIN, and sees the same shared view once signed in.";
     wrap.appendChild(courtesySub);
-    const courtesyPinCard = document.createElement("div");
-    courtesyPinCard.className = "card";
-    wrap.appendChild(courtesyPinCard);
-    async function renderCourtesyPinCard() {
-      const pin = await loadCourtesyPin();
-      courtesyPinCard.innerHTML = "";
-      const row = document.createElement("div");
-      row.className = "roster-row"; row.style.borderBottom = "none";
-      row.innerHTML = `<div class="roster-name">Courtesy Flow PIN</div>`;
-      const pinSpan = document.createElement("span");
-      pinSpan.className = "roster-pin"; pinSpan.style.fontSize = "18px";
-      pinSpan.textContent = pin || "Not set";
-      row.appendChild(pinSpan);
-      courtesyPinCard.appendChild(row);
-      const genBtn = document.createElement("button");
-      genBtn.className = "btn btn-secondary"; genBtn.style.marginTop = "10px";
-      genBtn.textContent = pin ? "Generate new PIN" : "Generate PIN";
-      genBtn.onclick = async () => {
-        const newPin = String(Math.floor(1000 + Math.random() * 9000));
-        await saveCourtesyPin(newPin);
-        showToast("Courtesy Flow PIN set to " + newPin);
-        renderCourtesyPinCard();
-      };
-      courtesyPinCard.appendChild(genBtn);
+
+    const courtesyRosterHolder = document.createElement("div");
+    wrap.appendChild(courtesyRosterHolder);
+    function renderCourtesyRosterList() {
+      courtesyRosterHolder.innerHTML = "";
+      if (!state.courtesyRoster.length) { courtesyRosterHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No one added yet.</div>`; return; }
+      const card = document.createElement("div"); card.className = "card";
+      state.courtesyRoster.forEach((p, i) => {
+        const row = document.createElement("div"); row.className = "roster-row";
+        row.innerHTML = `<div class="roster-name" style="flex:1;">${esc(p.name)}</div>`;
+        const pin = document.createElement("span"); pin.className = "roster-pin"; pin.textContent = p.pin;
+        const del = document.createElement("button"); del.className = "roster-del"; del.textContent = "\u2715";
+        del.onclick = async () => {
+          if (!confirm("Remove " + p.name + "?")) return;
+          state.courtesyRoster = state.courtesyRoster.filter((_, idx) => idx !== i);
+          await saveCourtesyRoster(state.courtesyRoster);
+          renderCourtesyRosterList();
+        };
+        row.appendChild(pin); row.appendChild(del);
+        card.appendChild(row);
+      });
+      courtesyRosterHolder.appendChild(card);
     }
-    renderCourtesyPinCard();
+    loadCourtesyRoster().then(r => { state.courtesyRoster = r; renderCourtesyRosterList(); });
+
+    const courtesyNameLabel = document.createElement("label"); courtesyNameLabel.textContent = "Add a person"; courtesyNameLabel.style.marginTop = "14px";
+    const courtesyNameInput = document.createElement("input"); courtesyNameInput.type = "text"; courtesyNameInput.placeholder = "Full name";
+    wrap.appendChild(courtesyNameLabel); wrap.appendChild(courtesyNameInput);
+    const courtesyAddBtn = document.createElement("button");
+    courtesyAddBtn.className = "btn btn-primary"; courtesyAddBtn.style.marginTop = "10px"; courtesyAddBtn.textContent = "Generate PIN & add";
+    courtesyAddBtn.onclick = async () => {
+      const name = courtesyNameInput.value.trim();
+      if (!name) { showToast("Enter a name"); return; }
+      const pin = String(Math.floor(1000 + Math.random() * 9000));
+      state.courtesyRoster.push({ name, pin });
+      await saveCourtesyRoster(state.courtesyRoster);
+      courtesyNameInput.value = "";
+      renderCourtesyRosterList();
+      showToast(name + " added \u2014 PIN " + pin);
+    };
+    wrap.appendChild(courtesyAddBtn);
 
     const helpdeskHeading = document.createElement("h2");
     helpdeskHeading.textContent = "Help Desk access";
@@ -2303,6 +2633,48 @@
       go("role-select");
     };
     wrap.appendChild(logoutBtn);
+
+    const dangerHeading = document.createElement("h2");
+    dangerHeading.textContent = "Danger Zone";
+    dangerHeading.style.cssText = "margin-top:36px; color:var(--red);";
+    wrap.appendChild(dangerHeading);
+    const dangerSub = document.createElement("p");
+    dangerSub.className = "subtitle";
+    dangerSub.textContent = "For clearing out test runs before the real event, while keeping your guides and PINs set up exactly as they are. There is no undo.";
+    wrap.appendChild(dangerSub);
+    const dangerList = document.createElement("ul");
+    dangerList.style.cssText = "margin: 0 0 14px 20px; font-size: 13px; color: var(--text-dim); line-height: 1.6;";
+    dangerList.innerHTML = `
+      <li>Deletes: every run and every manifest.</li>
+      <li>Kept as-is: your guide roster and their PINs, the Courtesy Flow PIN, the Help Desk PIN, your coordinator password, and your Google Sheet connection URL.</li>
+      <li>Not touched: your Google Sheet itself still has old test rows in "Live Status" \u2014 clear those separately (delete the tab and let it regenerate, or delete the rows by hand).</li>`;
+    wrap.appendChild(dangerList);
+    const resetBtn = document.createElement("button");
+    resetBtn.className = "btn btn-danger";
+    resetBtn.textContent = "\u26a0\uFE0F Reset All Runs \u2014 Start Fresh";
+    resetBtn.onclick = async () => {
+      const step1 = confirm("This permanently deletes every run and manifest. Your guides, PINs, coordinator password, and Google Sheet connection are all kept exactly as they are. This cannot be undone.\n\nContinue?");
+      if (!step1) return;
+      const typed = prompt('Type RESET (all capitals) to confirm you want to permanently delete all runs:');
+      if (typed !== "RESET") { showToast("Reset cancelled \u2014 text didn't match"); return; }
+      resetBtn.disabled = true; resetBtn.textContent = "Resetting\u2026";
+      const idx = await getJSON("run-index", []);
+      for (const entry of idx) {
+        await deleteKey("run-" + entry.runId);
+      }
+      await setJSON("run-index", []);
+      state.runIndex = [];
+      // clear any stale "resume into a run" pointers left over from the deleted
+      // runs, so a guide logging back in lands on the normal run list instead
+      // of a dead resume attempt — their name, phone, email, and PIN are untouched
+      const roster = await loadRoster();
+      roster.forEach(g => { g.lastRunId = null; g.lastBusNum = null; });
+      await saveRoster(roster);
+      showToast("All runs cleared \u2014 guides and PINs kept, ready for new runs");
+      state.coordTab = "dashboard";
+      go("coord-home");
+    };
+    wrap.appendChild(resetBtn);
 
     return wrap;
   }
@@ -2387,16 +2759,20 @@
     const runsData = [
       ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company",
        "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
-       "Catering (Yes/No)", "Catering Details", "Notes"],
-      ["RUN-001", "JFK arrivals to Marriott Marquis", "JFK Airport", "Marriott Marquis", "JFK Cell Phone Lot", 2, "Academy Express",
+       "Catering (Yes/No)", "Catering Details",
+       "Announcement - Beginning of Run", "Announcement - During Run", "Announcement - Upon Arrival"],
+      ["RUN-001", "EWR arrivals to New York Hall", "EWR Terminal A", "New York Hall", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
        "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
-       "Yes", "2x breakfast boxes, bottled water", "VIP group \u2014 coordinate with hotel bell desk"],
+       "Yes", "2x breakfast boxes, bottled water",
+       "Welcome aboard! Please have your badge visible for the driver.",
+       "Restrooms are at the back. Estimated travel time is 25 minutes.",
+       "Please take all belongings. Follow signage to registration."],
     ];
     const manifestData = [
-      ["Run ID", "Passenger Name"],
-      ["RUN-001", "Jane Rider"],
-      ["RUN-001", "John Traveler"],
-      ["RUN-001", "Alex Guest"],
+      ["Run ID", "Passenger Name", "Special Needs"],
+      ["RUN-001", "Jane Rider", ""],
+      ["RUN-001", "John Traveler", "Wheelchair access"],
+      ["RUN-001", "Alex Guest", "Vegetarian meal"],
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(runsData), "Runs");
@@ -2420,18 +2796,22 @@
       const rid = String(row["Run ID"] || "").trim();
       const name = String(row["Passenger Name"] || row["Name"] || "").trim();
       if (!rid || !name) return;
+      const specialNeeds = String(row["Special Needs"] || "").trim();
       if (!manifestByRun[rid]) manifestByRun[rid] = [];
-      manifestByRun[rid].push(name);
+      manifestByRun[rid].push({ name, specialNeeds });
     });
 
-    let created = 0, skipped = 0, unmatchedGuides = new Set();
+    let created = 0, skipped = 0, unmatchedGuides = new Set(), unmatchedLocations = new Set();
     for (const row of runsRows) {
       const runId = String(row["Run ID"] || "").trim();
       if (!runId) continue;
       if (state.runIndex.some(r => r.runId === runId)) { skipped++; continue; }
       const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
-      const names = manifestByRun[runId] || [];
-      const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
+      const people = manifestByRun[runId] || [];
+      const manifest = people.map((p, i) => ({
+        id: runId + "-" + i, name: p.name, boarded: false, busNum: null, boardedAt: null,
+        specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "",
+      }));
       const buses = Array.from({ length: numBuses }, (_, i) => {
         const raw = String(row["Bus " + (i + 1) + " Guide"] || "").trim();
         let guideName = "";
@@ -2444,19 +2824,28 @@
           num: i + 1, status: "Not Started", guideName, stagingAt: null, departedAt: null, completedAt: null,
           eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
           guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+          checklistBypassed: false,
         };
       });
       const cateringVal = String(row["Catering (Yes/No)"] || row["Catering"] || "").trim().toLowerCase();
       const companyRaw = String(row["Bus Company"] || "").trim();
       const companyMatch = BUS_COMPANIES.find(c => c.toLowerCase() === companyRaw.toLowerCase());
+      const originRaw = String(row["Origin"] || "").trim();
+      const originMatch = ORIGINS.find(o => o.toLowerCase() === originRaw.toLowerCase());
+      const destRaw = String(row["Destination"] || "").trim();
+      const destMatch = DESTINATIONS.find(d => d.toLowerCase() === destRaw.toLowerCase());
+      if (originRaw && !originMatch) unmatchedLocations.add("Origin: " + originRaw);
+      if (destRaw && !destMatch) unmatchedLocations.add("Destination: " + destRaw);
       const run = {
         runId, description: String(row["Description"] || "").trim(),
-        origin: String(row["Origin"] || "").trim(), destination: String(row["Destination"] || "").trim(),
+        origin: originMatch || originRaw, destination: destMatch || destRaw,
         stagingLocation: String(row["Staging Location"] || "").trim(),
         busCompany: companyMatch || companyRaw,
         catering: ["yes", "y", "true"].includes(cateringVal),
         cateringDetails: String(row["Catering Details"] || "").trim(),
-        notes: String(row["Notes"] || "").trim(),
+        announceBefore: String(row["Announcement - Beginning of Run"] || "").trim(),
+        announceDuring: String(row["Announcement - During Run"] || "").trim(),
+        announceArrival: String(row["Announcement - Upon Arrival"] || "").trim(),
         numBuses, buses, manifest, createdAt: Date.now(),
       };
       await saveRun(run);
@@ -2467,7 +2856,8 @@
     showToast(
       created + " run(s) imported" +
       (skipped ? ", " + skipped + " skipped (duplicate ID)" : "") +
-      (unmatchedGuides.size ? ", " + unmatchedGuides.size + " guide name(s) not found in roster" : "")
+      (unmatchedGuides.size ? ", " + unmatchedGuides.size + " guide name(s) not found in roster" : "") +
+      (unmatchedLocations.size ? ", " + unmatchedLocations.size + " location(s) didn't match the fixed list" : "")
     );
     state.coordTab = "dashboard";
     go("coord-home");
@@ -2531,9 +2921,25 @@
     const descLabel = document.createElement("label"); descLabel.textContent = "Description";
     const descInput = document.createElement("input"); descInput.type = "text"; descInput.placeholder = "e.g. JFK arrivals \u2192 Marriott Marquis";
     const originLabel = document.createElement("label"); originLabel.textContent = "Origin";
-    const originInput = document.createElement("input"); originInput.type = "text"; originInput.placeholder = "e.g. JFK Airport";
+    const originInput = document.createElement("select");
+    const originBlankOpt = document.createElement("option");
+    originBlankOpt.value = ""; originBlankOpt.textContent = "\u2014 Select origin \u2014";
+    originInput.appendChild(originBlankOpt);
+    ORIGINS.forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name; opt.textContent = name;
+      originInput.appendChild(opt);
+    });
     const destLabel = document.createElement("label"); destLabel.textContent = "Destination";
-    const destInput = document.createElement("input"); destInput.type = "text"; destInput.placeholder = "e.g. Marriott Marquis";
+    const destInput = document.createElement("select");
+    const destBlankOpt = document.createElement("option");
+    destBlankOpt.value = ""; destBlankOpt.textContent = "\u2014 Select destination \u2014";
+    destInput.appendChild(destBlankOpt);
+    DESTINATIONS.forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name; opt.textContent = name;
+      destInput.appendChild(opt);
+    });
     const stageLabel = document.createElement("label"); stageLabel.textContent = "Staging location";
     const stageInput = document.createElement("input"); stageInput.type = "text"; stageInput.placeholder = "e.g. JFK Cell Phone Lot";
     const busLabel = document.createElement("label"); busLabel.textContent = "Number of buses";
@@ -2619,14 +3025,35 @@
       cateringDetailsInput.style.display = cateringCheck.checked ? "block" : "none";
     };
 
-    const notesLabel = document.createElement("label"); notesLabel.textContent = "Announcements / route notes";
-    const notesInput = document.createElement("textarea"); notesInput.placeholder = "Anything the guide should know or announce on the bus";
+    const announceHeading = document.createElement("h3");
+    announceHeading.textContent = "Announcements";
+    announceHeading.style.marginTop = "18px";
+    const announceHint = document.createElement("p");
+    announceHint.className = "subtitle"; announceHint.style.marginTop = "-6px";
+    announceHint.textContent = "Shown to the guide at the matching stage of their run \u2014 all optional.";
+    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run (before the bus departs)";
+    const announceBeforeInput = document.createElement("textarea"); announceBeforeInput.placeholder = "e.g. Welcome aboard! Please have your badge visible for the driver.";
+    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run (while in transit)";
+    const announceDuringInput = document.createElement("textarea"); announceDuringInput.placeholder = "e.g. Restrooms are at the back. Estimated travel time is 25 minutes.";
+    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival at destination";
+    const announceArrivalInput = document.createElement("textarea"); announceArrivalInput.placeholder = "e.g. Please take all belongings. Follow signage to registration.";
 
     const manifestLabel = document.createElement("label"); manifestLabel.textContent = "Passenger manifest \u2014 one name per line";
     const manifestArea = document.createElement("textarea"); manifestArea.placeholder = "Jane Rider\nJohn Traveler\nAlex Guest\n\u2026";
 
+    const specialNeedsLabel = document.createElement("label"); specialNeedsLabel.textContent = "Special needs / accessibility \u2014 optional";
+    const specialNeedsHint = document.createElement("p");
+    specialNeedsHint.className = "subtitle"; specialNeedsHint.style.marginTop = "-8px";
+    specialNeedsHint.textContent = "One per line, format: Name: note (e.g. \"Jane Rider: Wheelchair access\"). Names must match the manifest above exactly.";
+    const specialNeedsArea = document.createElement("textarea"); specialNeedsArea.placeholder = "Jane Rider: Wheelchair access\nAlex Guest: Vegetarian meal\n\u2026";
+
     [cateringRow, cateringDetailsLabel, cateringDetailsInput,
-     notesLabel, notesInput, manifestLabel, manifestArea].forEach(el => screen.appendChild(el));
+     announceHeading, announceHint,
+     announceBeforeLabel, announceBeforeInput,
+     announceDuringLabel, announceDuringInput,
+     announceArrivalLabel, announceArrivalInput,
+     manifestLabel, manifestArea,
+     specialNeedsLabel, specialNeedsHint, specialNeedsArea].forEach(el => screen.appendChild(el));
 
     const btnRow = document.createElement("div");
     btnRow.className = "btn-row";
@@ -2640,7 +3067,21 @@
       if (state.runIndex.some(r => r.runId === runId)) { showToast("That Run ID already exists"); return; }
       const numBuses = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
       const names = manifestArea.value.split("\n").map(n => n.trim()).filter(Boolean);
-      const manifest = names.map((name, i) => ({ id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null }));
+      const specialNeedsMap = {};
+      let unmatchedSpecialNeeds = 0;
+      specialNeedsArea.value.split("\n").map(l => l.trim()).filter(Boolean).forEach(line => {
+        const idx = line.indexOf(":");
+        if (idx === -1) { unmatchedSpecialNeeds++; return; }
+        const nameKey = line.slice(0, idx).trim().toLowerCase();
+        const note = line.slice(idx + 1).trim();
+        specialNeedsMap[nameKey] = note;
+      });
+      const manifest = names.map((name, i) => {
+        const note = specialNeedsMap[name.toLowerCase()];
+        return { id: runId + "-" + i, name, boarded: false, busNum: null, boardedAt: null, specialNeeds: !!note, specialNeedsNote: note || "" };
+      });
+      const matchedCount = Object.keys(specialNeedsMap).filter(k => names.some(n => n.toLowerCase() === k)).length;
+      const unmatchedNames = Object.keys(specialNeedsMap).length - matchedCount;
       const guideSelects = Array.from(guideAssignHolder.querySelectorAll("select"));
       const buses = Array.from({ length: numBuses }, (_, i) => {
         const sel = guideSelects.find(s => s.dataset.busIndex === String(i + 1));
@@ -2648,18 +3089,23 @@
           num: i + 1, status: "Not Started", guideName: sel ? sel.value : "", stagingAt: null, departedAt: null, completedAt: null,
           eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
           guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null,
+          checklistBypassed: false,
         };
       });
       const run = {
         runId, description: descInput.value.trim(), origin: originInput.value.trim(), destination: destInput.value.trim(),
         stagingLocation: stageInput.value.trim(), busCompany: companySelect.value, catering: cateringCheck.checked, cateringDetails: cateringDetailsInput.value.trim(),
-        notes: notesInput.value.trim(), numBuses, buses, manifest, createdAt: Date.now(),
+        announceBefore: announceBeforeInput.value.trim(), announceDuring: announceDuringInput.value.trim(), announceArrival: announceArrivalInput.value.trim(),
+        numBuses, buses, manifest, createdAt: Date.now(),
       };
       createBtn.disabled = true; createBtn.textContent = "Creating\u2026";
       await saveRun(run);
       state.runIndex.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
       await setJSON("run-index", state.runIndex);
-      showToast("Run " + runId + " created");
+      let msg = "Run " + runId + " created";
+      if (unmatchedNames > 0) msg += " \u2014 " + unmatchedNames + " special needs name(s) didn't match the manifest";
+      if (unmatchedSpecialNeeds > 0) msg += " \u2014 " + unmatchedSpecialNeeds + " special needs line(s) missing a colon, skipped";
+      showToast(msg);
       state.coordTab = "dashboard";
       go("coord-home");
     };
@@ -2714,9 +3160,14 @@
     screen.appendChild(refreshBtn);
 
     const editManifestBtn = document.createElement("button");
-    editManifestBtn.className = "btn btn-secondary"; editManifestBtn.style.marginBottom = "16px"; editManifestBtn.textContent = "\u270F\uFE0F Edit Manifest";
+    editManifestBtn.className = "btn btn-secondary"; editManifestBtn.style.marginBottom = "10px"; editManifestBtn.textContent = "\u270F\uFE0F Edit Manifest";
     editManifestBtn.onclick = () => go("coord-manifest-edit");
     screen.appendChild(editManifestBtn);
+
+    const editNotesBtn = document.createElement("button");
+    editNotesBtn.className = "btn btn-secondary"; editNotesBtn.style.marginBottom = "16px"; editNotesBtn.textContent = "\u270F\uFE0F Edit Announcements / Notes";
+    editNotesBtn.onclick = () => go("coord-edit-notes");
+    screen.appendChild(editNotesBtn);
 
     const exportHeading = document.createElement("h2"); exportHeading.textContent = "Export to Master Tracker"; exportHeading.style.marginTop = "12px";
     screen.appendChild(exportHeading);
@@ -2834,13 +3285,13 @@
     addBtn.onclick = async () => {
       const names = addArea.value.split("\n").map(n => n.trim()).filter(Boolean);
       if (!names.length) { showToast("Enter at least one name"); return; }
-      const fresh = await loadRun(run.runId);
       const stamp = Date.now();
-      names.forEach((name, i) => {
-        fresh.manifest.push({ id: run.runId + "-add-" + stamp + "-" + i, name, boarded: false, busNum: null, boardedAt: null });
+      const updated = await mutateRun(run.runId, (fresh) => {
+        names.forEach((name, i) => {
+          fresh.manifest.push({ id: run.runId + "-add-" + stamp + "-" + i, name, boarded: false, busNum: null, boardedAt: null, specialNeeds: false, specialNeedsNote: "" });
+        });
       });
-      await saveRun(fresh);
-      state.currentRun = fresh;
+      if (updated) state.currentRun = updated;
       addArea.value = "";
       showToast(names.length + " passenger(s) added");
       renderList();
@@ -2878,11 +3329,29 @@
         const ok = confirm("Remove " + personName + " from the manifest?");
         if (!ok) return;
       }
+      const updated = await mutateRun(run.runId, (fresh) => {
+        fresh.manifest = fresh.manifest.filter(p => p.id !== personId);
+      });
+      if (updated) state.currentRun = updated;
+      showToast(personName + " removed");
+      renderList();
+    }
+
+    async function toggleSpecialNeeds(personId, currentlyFlagged, currentNote) {
+      let note = "";
+      if (!currentlyFlagged) {
+        note = prompt("What's the note for this person? (e.g. \"Wheelchair access\", \"Vegetarian meal\")", "") || "";
+        if (!note.trim()) { showToast("No note entered \u2014 not flagged"); return; }
+      } else {
+        const ok = confirm("Remove the special needs flag for this person?");
+        if (!ok) return;
+      }
       const fresh = await loadRun(run.runId);
-      fresh.manifest = fresh.manifest.filter(p => p.id !== personId);
+      const person = fresh.manifest.find(p => p.id === personId);
+      person.specialNeeds = !currentlyFlagged;
+      person.specialNeedsNote = currentlyFlagged ? "" : note.trim();
       await saveRun(fresh);
       state.currentRun = fresh;
-      showToast(personName + " removed");
       renderList();
     }
 
@@ -2897,13 +3366,30 @@
       list.slice(0, 100).forEach(p => {
         const row = document.createElement("div");
         row.className = "card";
-        row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:12px 14px; margin-bottom:8px;";
+        row.style.cssText = "padding:12px 14px; margin-bottom:8px;";
+        const topRow = document.createElement("div");
+        topRow.style.cssText = "display:flex; align-items:center; justify-content:space-between;";
         const info = document.createElement("div");
         info.innerHTML = `<div style="font-size:14.5px;">${esc(p.name)}</div>${p.boarded ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Boarded \u2014 Bus ${p.busNum}</div>` : `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Not yet boarded</div>`}`;
         const delBtn = document.createElement("button");
         delBtn.className = "roster-del"; delBtn.textContent = "\u2715";
         delBtn.onclick = () => removePerson(p.id, p.name, p.boarded, p.busNum);
-        row.appendChild(info); row.appendChild(delBtn);
+        topRow.appendChild(info); topRow.appendChild(delBtn);
+        row.appendChild(topRow);
+
+        if (p.specialNeeds && p.specialNeedsNote) {
+          const note = document.createElement("div");
+          note.style.cssText = "margin-top:8px; font-size:12.5px; color:var(--accent); background:var(--accent-dim); padding:6px 10px; border-radius:6px;";
+          note.textContent = "\u2b50 " + p.specialNeedsNote;
+          row.appendChild(note);
+        }
+        const snBtn = document.createElement("button");
+        snBtn.className = "link-btn";
+        snBtn.style.cssText = "margin-top:8px; font-size:12px; display:block;";
+        snBtn.textContent = p.specialNeeds ? "Remove special needs flag" : "\u2b50 Mark special needs";
+        snBtn.onclick = () => toggleSpecialNeeds(p.id, !!p.specialNeeds, p.specialNeedsNote);
+        row.appendChild(snBtn);
+
         listHolder.appendChild(row);
       });
       if (list.length > 100) {
@@ -2917,6 +3403,64 @@
 
     updateStats();
     renderList();
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Coordinator: edit announcements / notes mid-run ----------
+  function renderCoordEditNotes() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Announcements", () => go("coord-run-detail")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Edit Announcements / Notes</h2>`;
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.textContent = "Safe to edit any time, even mid-run. Every guide on this run sees the update the next time their app refreshes.";
+    screen.appendChild(banner);
+
+    const announceBeforeLabel = document.createElement("label"); announceBeforeLabel.textContent = "1. Beginning of run (before the bus departs)";
+    const announceBeforeArea = document.createElement("textarea");
+    announceBeforeArea.value = run.announceBefore || "";
+    screen.appendChild(announceBeforeLabel); screen.appendChild(announceBeforeArea);
+
+    const announceDuringLabel = document.createElement("label"); announceDuringLabel.textContent = "2. During the run (while in transit)";
+    announceDuringLabel.style.marginTop = "16px";
+    const announceDuringArea = document.createElement("textarea");
+    announceDuringArea.value = run.announceDuring || "";
+    screen.appendChild(announceDuringLabel); screen.appendChild(announceDuringArea);
+
+    const announceArrivalLabel = document.createElement("label"); announceArrivalLabel.textContent = "3. Upon arrival at destination";
+    announceArrivalLabel.style.marginTop = "16px";
+    const announceArrivalArea = document.createElement("textarea");
+    announceArrivalArea.value = run.announceArrival || "";
+    screen.appendChild(announceArrivalLabel); screen.appendChild(announceArrivalArea);
+
+    const cateringLabel = document.createElement("label"); cateringLabel.textContent = "Catering details";
+    cateringLabel.style.marginTop = "16px";
+    const cateringArea = document.createElement("textarea");
+    cateringArea.value = run.cateringDetails || "";
+    screen.appendChild(cateringLabel); screen.appendChild(cateringArea);
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "btn btn-primary"; saveBtn.style.marginTop = "16px"; saveBtn.textContent = "Save changes";
+    saveBtn.onclick = async () => {
+      const beforeVal = announceBeforeArea.value.trim();
+      const duringVal = announceDuringArea.value.trim();
+      const arrivalVal = announceArrivalArea.value.trim();
+      const cateringVal = cateringArea.value.trim();
+      const updated = await mutateRun(run.runId, (fresh) => {
+        fresh.announceBefore = beforeVal;
+        fresh.announceDuring = duringVal;
+        fresh.announceArrival = arrivalVal;
+        fresh.cateringDetails = cateringVal;
+      });
+      if (updated) state.currentRun = updated;
+      showToast("Announcements updated");
+      go("coord-run-detail");
+    };
+    screen.appendChild(saveBtn);
     c.appendChild(screen);
     return c;
   }
@@ -2983,6 +3527,13 @@
       const checklistHeading = document.createElement("h3");
       checklistHeading.textContent = "Pre-run checklist";
       bodyHolder.appendChild(checklistHeading);
+      if (bus.checklistBypassed && !getChecklistItems(run).every(it => bus[it.key])) {
+        const bypassNote = document.createElement("div");
+        bypassNote.className = "banner";
+        bypassNote.style.cssText = "border-left-color:var(--accent); background:var(--accent-dim);";
+        bypassNote.textContent = "\u26a0\ufe0f This guide skipped the checklist and proceeded straight to boarding.";
+        bodyHolder.appendChild(bypassNote);
+      }
       const checklistCard = document.createElement("div");
       checklistCard.className = "card";
       const coordChecklistItems = getChecklistItems(run);
@@ -2991,7 +3542,7 @@
         const row = document.createElement("div");
         row.className = "bus-detail-row";
         if (i === coordChecklistItems.length - 1) row.style.borderBottom = "none";
-        row.innerHTML = `<div class="bus-detail-left"><div class="checkbox" style="${done ? 'background:var(--green); border-color:var(--green); color:#08201a;' : ''}">${done ? "\u2713" : ""}</div>
+        row.innerHTML = `<div class="bus-detail-left"><div class="checkbox" style="${done ? 'background:var(--green); border-color:var(--green); color:#fff;' : ''}">${done ? "\u2713" : ""}</div>
             <span style="font-size:13.5px; color:${done ? "var(--text)" : "var(--text-dim)"};">${esc(item.short)}</span></div>
           <span style="font-size:11px; color:var(--text-dim); font-family:var(--mono);">${done ? timeAgo(bus[item.key + "At"]) : "pending"}</span>`;
         checklistCard.appendChild(row);
@@ -3136,14 +3687,17 @@
     root.appendChild(screen);
     document.getElementById("retry-storage-btn").onclick = () => {
       if (storageBridgeMissing()) { renderStorageWarning(); }
-      else { render(); }
+      else { window.__authReady.then(() => render()); }
     };
   }
 
   if (storageBridgeMissing()) {
     renderStorageWarning();
   } else {
-    render();
+    // Wait for anonymous sign-in before the app tries to read/write anything —
+    // the database rules require a signed-in user, so reads attempted
+    // before this resolves would just fail.
+    window.__authReady.then(() => render());
   }
 })();
 

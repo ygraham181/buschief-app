@@ -1,12 +1,12 @@
 {
-  "name": "BusChief",
-  "short_name": "BusChief",
+  "name": "Orbit BusChief",
+  "short_name": "Orbit BusChief",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#12161b",
-  "theme_color": "#12161b",
+  "background_color": "#F4F6F9",
+  "theme_color": "#16284D",
   "description": "Live bus run tracking, manifest check-in, and status for guides and coordinators.",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
