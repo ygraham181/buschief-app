@@ -205,9 +205,10 @@
   const BUS_COMPANIES = ["Academy Express", "Yankee Line"];
   const DESTINATIONS = [
     "Westfield Hall", "New York Hall", "EWR Terminal A", "EWR Terminal B", "EWR Terminal C",
-    "Allentown Airport (ABE)", "Stewart International Airport (SWF)", "LGA", "JFK Terminal 8",
+    "Allentown Airport (ABE)", "Stewart International Airport (SWF)", "Westchester County Airport (HPN)",
+    "LGA", "JFK Terminal 8",
   ];
-  const ORIGINS = DESTINATIONS.filter(d => d !== "LGA" && d !== "JFK Terminal 8");
+  const ORIGINS = DESTINATIONS.filter(d => d !== "JFK Terminal 8"); // LGA is allowed as an origin too — only JFK T8 stays destination-only
   const AUTH_SESSION_MS = 60 * 60 * 1000; // stay signed in for 60 minutes of inactivity — applies to every role, not just the coordinator
   function getChecklistItems(run) {
     const items = [
@@ -219,6 +220,7 @@
   }
   const STATUS_CLASS = s => "status-" + s.replace(/\s+/g, "-");
   const ETA_INTERVAL_MS = 15 * 60 * 1000;
+  const PASSENGER_ANNOUNCEMENT_INTERVAL_MS = 30 * 60 * 1000; // guest-facing ETA/traffic update cadence — separate from the 15-min ETA re-confirmation above
   const LOC_WRITE_INTERVAL_MS = 25 * 1000;
 
   let state = {
@@ -914,6 +916,121 @@
     const remaining = (since + ETA_INTERVAL_MS) - Date.now();
     return Math.max(0, Math.ceil(remaining / 60000));
   }
+  // Separate from the ETA re-confirmation above — this tracks when the guide
+  // last made a MIC ANNOUNCEMENT to passengers (ETA + traffic), independent
+  // of whether they've updated the system ETA. Starts counting from departure.
+  function announcementDue(bus) {
+    if (bus.status !== "In Route") return false;
+    const since = bus.lastAnnouncementAt || bus.departedAt || Date.now();
+    return Date.now() - since >= PASSENGER_ANNOUNCEMENT_INTERVAL_MS;
+  }
+  function announcementMinutesUntilDue(bus) {
+    const since = bus.lastAnnouncementAt || bus.departedAt || Date.now();
+    const remaining = (since + PASSENGER_ANNOUNCEMENT_INTERVAL_MS) - Date.now();
+    return Math.max(0, Math.ceil(remaining / 60000));
+  }
+
+  // Shared Beginning/During/Arrival tabbed card, used both on the guide's
+  // Route Overview (pure preview, no live status) and their execute screen
+  // (live status + the 30-min reminder). The tab matching the bus's real
+  // status is marked NOW, but the guide can tap any tab to preview it
+  // without that changing anything about the run itself.
+  function buildPhaseTabsCard(run, opts) {
+    opts = opts || {};
+    const currentPhase = opts.currentPhase || null; // "before" | "during" | "arrival" | null
+    const dueReminder = opts.dueReminder || null;   // { due, minutesUntilDue, onAck } — "during" phase only, execute screen only
+    const phases = [
+      { key: "before", tabLabel: "1. Beginning", sectionLabel: "1. Beginning of run", proc: run.procedureBefore, script: run.announceBefore },
+      { key: "during", tabLabel: "2. During", sectionLabel: "2. During the run", proc: run.procedureDuring, script: run.announceDuring },
+      { key: "arrival", tabLabel: "3. Arrival", sectionLabel: "3. Upon arrival", proc: run.procedureArrival, script: run.announceArrival },
+    ];
+    if (!phases.some(p => p.proc || p.script)) return null; // nothing set anywhere — caller can skip mounting this at all
+
+    let selected = currentPhase || "before"; // what the guide is currently VIEWING (starts on whatever is really happening)
+    const wrap = document.createElement("div");
+
+    const tabBar = document.createElement("div");
+    tabBar.style.cssText = "display:flex; gap:6px; margin-bottom:10px;";
+    const contentHolder = document.createElement("div");
+
+    function renderContent() {
+      contentHolder.innerHTML = "";
+      const p = phases.find(x => x.key === selected);
+      const card = document.createElement("div");
+      card.className = "card";
+      const isReallyNow = selected === currentPhase;
+      if (isReallyNow) {
+        const nowTag = document.createElement("div");
+        nowTag.style.cssText = "display:inline-block; font-size:10px; font-weight:700; color:#fff; background:var(--brand); padding:2px 7px; border-radius:4px; margin-bottom:10px;";
+        nowTag.textContent = "NOW";
+        card.appendChild(nowTag);
+      }
+      if (p.proc) {
+        const procLabel = document.createElement("div");
+        procLabel.style.cssText = "font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim); margin-bottom:4px;";
+        procLabel.textContent = "Guide procedure";
+        const procText = document.createElement("div");
+        procText.style.cssText = "font-size:14px; color:var(--text); white-space:pre-wrap; margin-bottom:14px;";
+        procText.textContent = p.proc;
+        card.appendChild(procLabel); card.appendChild(procText);
+      }
+      if (p.script) {
+        const scriptLabel = document.createElement("div");
+        scriptLabel.style.cssText = "font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--brand); margin-bottom:4px;";
+        scriptLabel.textContent = "Say to passengers";
+        const scriptText = document.createElement("div");
+        scriptText.style.cssText = "font-size:14px; color:var(--text); white-space:pre-wrap; font-style:italic;";
+        scriptText.textContent = "\u201C" + p.script + "\u201D";
+        card.appendChild(scriptLabel); card.appendChild(scriptText);
+      }
+      if (!p.proc && !p.script) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:14px; color:var(--text-dim);";
+        empty.textContent = "Nothing set for this stage.";
+        card.appendChild(empty);
+      }
+      if (selected === "during" && dueReminder && dueReminder.due) {
+        const dueBox = document.createElement("div");
+        dueBox.style.cssText = "margin-top:14px; padding:10px 12px; background:var(--accent-dim); border:1px solid var(--accent); border-radius:8px;";
+        const dueMsg = document.createElement("div");
+        dueMsg.style.cssText = "font-size:12.5px; font-weight:700; color:var(--accent); margin-bottom:8px;";
+        dueMsg.textContent = "\uD83D\uDD0A Time for a passenger update \u2014 give guests the current ETA and any traffic news.";
+        dueBox.appendChild(dueMsg);
+        const ackBtn = document.createElement("button");
+        ackBtn.className = "btn btn-secondary"; ackBtn.style.cssText = "width:100%; font-size:13px; padding:8px;";
+        ackBtn.textContent = "\u2713 Announcement made";
+        ackBtn.onclick = dueReminder.onAck;
+        dueBox.appendChild(ackBtn);
+        card.appendChild(dueBox);
+      } else if (selected === "during" && dueReminder && !dueReminder.due) {
+        const subtext = document.createElement("div");
+        subtext.style.cssText = "margin-top:10px; font-size:12px; color:var(--text-dim);";
+        subtext.textContent = "Next passenger update due in " + dueReminder.minutesUntilDue + "m";
+        card.appendChild(subtext);
+      }
+      contentHolder.appendChild(card);
+    }
+
+    function renderTabs() {
+      tabBar.innerHTML = "";
+      phases.forEach(p => {
+        const tab = document.createElement("button");
+        const isSel = p.key === selected;
+        const isReallyNow = p.key === currentPhase;
+        tab.style.cssText = "flex:1; padding:8px 4px; font-size:12px; font-weight:700; border-radius:8px; border:1px solid var(--border); cursor:pointer;" +
+          (isSel ? " background:var(--brand); color:#fff; border-color:var(--brand);" : " background:var(--panel-alt); color:var(--text);");
+        tab.textContent = p.tabLabel + (p.key === "during" && dueReminder && dueReminder.due ? " \uD83D\uDD0A" : (isReallyNow ? " \u2022" : ""));
+        tab.onclick = () => { selected = p.key; renderTabs(); renderContent(); };
+        tabBar.appendChild(tab);
+      });
+    }
+
+    renderTabs(); renderContent();
+    wrap.appendChild(tabBar); wrap.appendChild(contentHolder);
+    wrap.refreshDue = renderContent; // exposed so the caller can re-render just the due-reminder countdown on poll ticks
+    return wrap;
+  }
+
   function startGeoWatch(runId, busNum) {
     stopGeo();
     if (!("geolocation" in navigator)) return;
@@ -929,13 +1046,12 @@
     );
   }
   async function updateBusLocation(runId, busNum, lat, lng) {
-    const fresh = await loadRun(runId);
-    if (!fresh) return;
-    const bus = fresh.buses.find(b => b.num === busNum);
-    if (!bus) return;
-    bus.loc = { lat, lng, at: Date.now() };
-    await saveRun(fresh);
-    if (state.currentRun && state.currentRun.runId === runId) state.currentRun = fresh;
+    const updated = await mutateRun(runId, (fresh) => {
+      const bus = fresh.buses.find(b => b.num === busNum);
+      if (!bus) return;
+      bus.loc = { lat, lng, at: Date.now() };
+    });
+    if (updated && state.currentRun && state.currentRun.runId === runId) state.currentRun = updated;
   }
 
   function statusStepperUI(run, busNum, onAdvance) {
@@ -1104,6 +1220,21 @@
         });
         bodyHolder.appendChild(card);
 
+        // The full guide-only procedure for this stage (Before Loading, food
+        // and beverage checks, etc.) lives right here next to the checklist
+        // itself, since it's the same moment — never shown to passengers.
+        if (state.currentRun.procedureBefore) {
+          const procHeading = document.createElement("h3");
+          procHeading.style.marginTop = "20px";
+          procHeading.textContent = "Full procedure";
+          bodyHolder.appendChild(procHeading);
+          const procCard = document.createElement("div");
+          procCard.className = "card";
+          procCard.style.cssText = "font-size:14px; color:var(--text); white-space:pre-wrap;";
+          procCard.textContent = state.currentRun.procedureBefore;
+          bodyHolder.appendChild(procCard);
+        }
+
         const bypassWrap = document.createElement("div");
         bypassWrap.style.cssText = "margin-top:18px; text-align:center;";
         if (state.viewingChecklist) {
@@ -1160,16 +1291,25 @@
       function renderStepper() {
         stepperHolder.innerHTML = "";
         stepperHolder.appendChild(statusStepperUI(state.currentRun, busNum, async () => {
-          const fresh = await loadRun(run.runId);
-          const bus = fresh.buses.find(b => b.num === busNum);
-          const idx = STATUS_ORDER.indexOf(bus.status);
-          bus.status = STATUS_ORDER[idx + 1];
-          if (bus.status === "In Route") { bus.departedAt = Date.now(); startGeoWatch(run.runId, busNum); }
-          if (bus.status === "Completed") { bus.completedAt = Date.now(); stopGeo(); await clearGuideResume(state.guidePin); }
-          await saveRun(fresh);
-          state.currentRun = fresh;
+          let newStatus = null;
+          const updated = await mutateRun(run.runId, (fresh) => {
+            const bus = fresh.buses.find(b => b.num === busNum);
+            if (!bus) return;
+            const idx = STATUS_ORDER.indexOf(bus.status);
+            bus.status = STATUS_ORDER[idx + 1];
+            newStatus = bus.status;
+            if (bus.status === "In Route") {
+              bus.departedAt = Date.now();
+              bus.lastAnnouncementAt = Date.now(); // 30-min passenger-update clock starts at departure, same as the ETA clock
+            }
+            if (bus.status === "Completed") { bus.completedAt = Date.now(); }
+          });
+          if (!updated) return;
+          if (newStatus === "In Route") startGeoWatch(run.runId, busNum);
+          if (newStatus === "Completed") { stopGeo(); await clearGuideResume(state.guidePin); }
+          state.currentRun = updated;
           renderStepper(); renderEtaBanner(true); updateGpsRow(); renderBody2Track(); renderSwitchRunPrompt(); renderAnnouncements();
-          showToast("Bus " + busNum + " marked " + bus.status);
+          showToast("Bus " + busNum + " marked " + newStatus);
         }));
       }
       function renderBody2Track() { track.innerHTML = `<b>${myBus().status === "In Route" ? "In route" : myBus().status === "Completed" ? "Completed" : "Boarding"}</b>`; }
@@ -1205,32 +1345,27 @@
         announceHolder.innerHTML = "";
         const bus = myBus();
         const cur = state.currentRun;
-        const phase = (bus.status === "Not Started" || bus.status === "At Staging") ? "before"
+        const currentPhase = (bus.status === "Not Started" || bus.status === "At Staging") ? "before"
           : bus.status === "In Route" ? "during" : "arrival";
-        const sections = [
-          { key: "before", label: "1. Beginning of run", text: cur.announceBefore },
-          { key: "during", label: "2. During the run", text: cur.announceDuring },
-          { key: "arrival", label: "3. Upon arrival", text: cur.announceArrival },
-        ];
-        if (!sections.some(s => s.text)) return; // nothing set anywhere — keep the screen uncluttered
+        const dueReminder = bus.status === "In Route" ? {
+          due: announcementDue(bus),
+          minutesUntilDue: announcementMinutesUntilDue(bus),
+          onAck: async () => {
+            const updated = await mutateRun(run.runId, (fresh) => {
+              const b = fresh.buses.find(b2 => b2.num === busNum);
+              if (b) b.lastAnnouncementAt = Date.now();
+            });
+            if (updated) state.currentRun = updated;
+            renderAnnouncements();
+            showToast("Logged \u2014 next update due in 30 minutes");
+          },
+        } : null;
+        const phaseCard = buildPhaseTabsCard(cur, { currentPhase, dueReminder });
+        if (!phaseCard) return; // nothing set anywhere — keep the screen uncluttered
         const heading = document.createElement("h3");
-        heading.textContent = "Announcements";
+        heading.textContent = "Beginning / During / Arrival";
         announceHolder.appendChild(heading);
-        const card = document.createElement("div");
-        card.className = "card"; card.style.padding = "0";
-        sections.forEach((s, i) => {
-          const isCurrent = s.key === phase;
-          const row = document.createElement("div");
-          row.style.cssText = "padding:12px 14px;" + (i > 0 ? " border-top:1px solid var(--border);" : "") +
-            (isCurrent ? " background:var(--brand-dim); border-radius:10px;" : "");
-          row.innerHTML = `<div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-              <span style="font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:${isCurrent ? "var(--brand)" : "var(--text-dim)"};">${esc(s.label)}</span>
-              ${isCurrent ? '<span style="font-size:10px; font-weight:700; color:#fff; background:var(--brand); padding:2px 7px; border-radius:4px;">NOW</span>' : ""}
-            </div>
-            <div style="font-size:14px; color:${s.text ? "var(--text)" : "var(--text-dim)"};">${s.text ? esc(s.text) : "Nothing set for this stage"}</div>`;
-          card.appendChild(row);
-        });
-        announceHolder.appendChild(card);
+        announceHolder.appendChild(phaseCard);
       }
       renderAnnouncements();
 
@@ -2802,12 +2937,17 @@
       ["Run ID", "Description", "Origin", "Destination", "Staging Location", "Number of Buses", "Bus Company",
        "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
        "Catering (Yes/No)", "Catering Details",
-       "Announcement - Beginning of Run", "Announcement - During Run", "Announcement - Upon Arrival"],
+       "Procedure - Beginning of Run", "Announcement - Beginning of Run",
+       "Procedure - During Run", "Announcement - During Run",
+       "Procedure - Upon Arrival", "Announcement - Upon Arrival"],
       ["RUN-001", "EWR arrivals to New York Hall", "EWR Terminal A", "New York Hall", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
        "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
        "Yes", "2x breakfast boxes, bottled water",
+       "Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.",
        "Welcome aboard! Please have your badge visible for the driver.",
+       "Keep the app open and location tracking on. Post the ETA in the Bus Guide Chat after departure.",
        "Restrooms are at the back. Estimated travel time is 25 minutes.",
+       "Help unload luggage. Collect trash and dispose of it on site. Mark the drop-off complete in the app.",
        "Please take all belongings. Follow signage to registration."],
     ];
     const manifestData = [
@@ -2885,8 +3025,11 @@
         busCompany: companyMatch || companyRaw,
         catering: ["yes", "y", "true"].includes(cateringVal),
         cateringDetails: String(row["Catering Details"] || "").trim(),
+        procedureBefore: String(row["Procedure - Beginning of Run"] || "").trim(),
         announceBefore: String(row["Announcement - Beginning of Run"] || "").trim(),
+        procedureDuring: String(row["Procedure - During Run"] || "").trim(),
         announceDuring: String(row["Announcement - During Run"] || "").trim(),
+        procedureArrival: String(row["Procedure - Upon Arrival"] || "").trim(),
         announceArrival: String(row["Announcement - Upon Arrival"] || "").trim(),
         numBuses, buses, manifest, createdAt: Date.now(),
       };
@@ -3388,12 +3531,13 @@
         const ok = confirm("Remove the special needs flag for this person?");
         if (!ok) return;
       }
-      const fresh = await loadRun(run.runId);
-      const person = fresh.manifest.find(p => p.id === personId);
-      person.specialNeeds = !currentlyFlagged;
-      person.specialNeedsNote = currentlyFlagged ? "" : note.trim();
-      await saveRun(fresh);
-      state.currentRun = fresh;
+      const updated = await mutateRun(run.runId, (fresh) => {
+        const person = fresh.manifest.find(p => p.id === personId);
+        if (!person) return;
+        person.specialNeeds = !currentlyFlagged;
+        person.specialNeedsNote = currentlyFlagged ? "" : note.trim();
+      });
+      if (updated) state.currentRun = updated;
       renderList();
     }
 
@@ -3611,13 +3755,17 @@
       const reassignBtn = document.createElement("button");
       reassignBtn.className = "btn btn-secondary"; reassignBtn.style.marginTop = "10px"; reassignBtn.textContent = "Save reassignment";
       reassignBtn.onclick = async () => {
-        const fresh = await loadRun(run.runId);
-        const freshBus = fresh.buses.find(b => b.num === busNum);
-        const oldGuideName = freshBus.guideName;
-        freshBus.guideName = select.value;
-        await saveRun(fresh);
-        await updateRunIndexEntry(run.runId, { assignedGuides: computeAssignedGuides(fresh.buses) });
-        if (oldGuideName && oldGuideName !== select.value) {
+        const newGuideName = select.value;
+        let oldGuideName = null;
+        const updated = await mutateRun(run.runId, (fresh) => {
+          const freshBus = fresh.buses.find(b => b.num === busNum);
+          if (!freshBus) return;
+          oldGuideName = freshBus.guideName;
+          freshBus.guideName = newGuideName;
+        });
+        if (!updated) return;
+        await updateRunIndexEntry(run.runId, { assignedGuides: computeAssignedGuides(updated.buses) });
+        if (oldGuideName && oldGuideName !== newGuideName) {
           const rosterList = await loadRoster();
           const oldGuide = rosterList.find(g => g.name === oldGuideName);
           if (oldGuide && oldGuide.lastRunId === run.runId && oldGuide.lastBusNum === busNum) {
@@ -3625,8 +3773,8 @@
             await saveRoster(rosterList);
           }
         }
-        state.currentRun = fresh;
-        showToast(select.value ? "Bus " + busNum + " reassigned to " + select.value : "Guide removed from Bus " + busNum);
+        state.currentRun = updated;
+        showToast(newGuideName ? "Bus " + busNum + " reassigned to " + newGuideName : "Guide removed from Bus " + busNum);
         renderBody();
       };
       reassignCard.appendChild(reassignBtn);
