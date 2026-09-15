@@ -2847,18 +2847,42 @@
       matches.slice(0, 20).forEach(run => {
         const agg = aggregateStatus(run);
         const card = document.createElement("div"); card.className = "card";
+        // Help Desk is fielding "where is this bus?" questions live, so the
+        // run's planned and live ETA both need to be readable at a glance,
+        // not buried in a line of bus detail.
+        const hdLiveEtas = run.buses.map(b => b.eta).filter(Boolean).sort((x, y) => x - y);
+        const hdLiveText = hdLiveEtas.length ? new Date(hdLiveEtas[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+        const hdPlannedText = formatPlannedTime(run.plannedArrival);
+        const hdDepartText = formatPlannedTime(run.departureTime);
         card.innerHTML = `<div class="run-row">
-            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>${run.busCompany ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}</div>
+            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>
+              ${run.origin || run.destination ? `<div style="font-size:12px; color:var(--brand); font-weight:600; margin-top:2px;">${esc(run.origin || "")} \u2192 ${esc(run.destination || "")}</div>` : ""}
+              ${run.busCompany ? `<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">\u{1F68C} ${esc(run.busCompany)}</div>` : ""}</div>
             <span class="status-pill ${STATUS_CLASS(agg)}"><span class="sdot"></span>${agg}</span>
-          </div>`;
+          </div>
+          <div style="display:flex; gap:8px; margin-top:12px;">
+            <div style="flex:1; padding:10px 12px; border-radius:10px; background:var(--panel-alt); border:1px solid var(--border);">
+              <div style="font-size:10.5px; font-family:var(--mono); letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim);">Planned ETA</div>
+              <div style="font-size:20px; font-weight:800; color:var(--text); line-height:1.15;">${hdPlannedText || "\u2014"}</div>
+            </div>
+            <div style="flex:1; padding:10px 12px; border-radius:10px; background:${hdLiveText ? "var(--brand-dim)" : "var(--panel-alt)"}; border:1px solid ${hdLiveText ? "var(--brand)" : "var(--border)"};">
+              <div style="font-size:10.5px; font-family:var(--mono); letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim);">Live ETA</div>
+              <div style="font-size:20px; font-weight:800; color:${hdLiveText ? "var(--brand)" : "var(--text-dim)"}; line-height:1.15;">${hdLiveText || "Not live yet"}</div>
+            </div>
+          </div>
+          ${hdDepartText ? `<div style="font-size:12px; color:var(--text-dim); margin-top:6px;">Departs ${esc(hdDepartText)}${run.departurePriority ? " \u00b7 departure order #" + run.departurePriority : ""}</div>` : ""}`;
         run.buses.forEach(bus => {
           const etaText = bus.eta ? new Date(bus.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014";
           const guide = bus.guideName ? roster.find(g => g.name === bus.guideName) : null;
           const row = document.createElement("div");
           row.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border);";
           row.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-              <span style="font-size:13px;">Bus ${bus.num} \u00b7 ${bus.guideName ? esc(bus.guideName) : "No guide"} \u00b7 ETA ${etaText}</span>
+              <span style="font-size:13px; font-weight:600;">Bus ${bus.num} \u00b7 ${bus.guideName ? esc(bus.guideName) : "No guide"}</span>
               <span class="status-pill ${STATUS_CLASS(bus.status)}"><span class="sdot"></span>${bus.status}</span>
+            </div>
+            <div style="display:flex; gap:16px; margin-top:4px; font-size:12.5px; color:var(--text-dim);">
+              <span>Planned: <b style="color:var(--text);">${hdPlannedText || "\u2014"}</b></span>
+              <span>Live: <b style="color:${bus.eta ? "var(--brand)" : "var(--text-dim)"};">${bus.eta ? etaText : "Not live yet"}</b></span>
             </div>
             ${bus.guideName ? `<div style="font-size:12.5px; color:var(--text-dim); margin-top:4px;">${contactLinksHtml(guide)}</div>` : ""}`;
           card.appendChild(row);
