@@ -879,14 +879,14 @@
       timeCard.className = "card";
       const rows = [];
       if (run.flightTime) {
-        rows.push(`<div class="overview-row" style="background:var(--brand-dim); border-radius:10px; padding:10px 12px;">
-            <div class="overview-label" style="color:var(--brand);">\u{1F464} You (guide) arrive by</div>
-            <div class="overview-value" style="font-size:20px; font-weight:700; color:var(--brand);">${esc(formatPlannedTime(minusMinutes(run.flightTime, 45)))}</div>
-            <div style="font-size:12px; color:var(--text-dim); margin-top:2px;">45 minutes before the flight \u2014 15 min ahead of the bus</div>
+        rows.push(`<div class="overview-row" style="background:var(--brand-dim); border-radius:10px; padding:12px 14px;">
+            <div class="overview-label" style="color:var(--brand);">\u{1F464} Your arrival time at bus staging location</div>
+            <div class="overview-value" style="font-size:24px; font-weight:800; color:var(--brand); line-height:1.2;">${esc(formatPlannedTime(minusMinutes(run.flightTime, 45)))}</div>
+            <div style="font-size:12.5px; color:var(--text-dim); margin-top:4px;">Be at the staging location by this time \u2014 45 minutes before the flight lands.</div>
           </div>`);
         rows.push(`<div class="overview-row">
-            <div class="overview-label">Bus at staging</div>
-            <div class="overview-value">${esc(formatPlannedTime(minusMinutes(run.flightTime, 30)))} <span style="font-size:12px; color:var(--text-dim);">(30 min before the flight)</span></div>
+            <div class="overview-label">Bus arrives at staging</div>
+            <div class="overview-value">${esc(formatPlannedTime(minusMinutes(run.flightTime, 30)))} <span style="font-size:12px; color:var(--text-dim);">(30 min before the flight \u2014 15 min after you)</span></div>
           </div>`);
         rows.push(`<div class="overview-row">
             <div class="overview-label">Flight arrives</div>
@@ -896,7 +896,15 @@
       if (run.departureTime) {
         rows.push(`<div class="overview-row">
             <div class="overview-label">Bus departs</div>
-            <div class="overview-value">${esc(formatPlannedTime(run.departureTime))}${run.departurePriority ? ` <span style="font-size:12px; color:var(--accent); font-weight:600;">\u00b7 departure order #${run.departurePriority}</span>` : ""}</div>
+            <div class="overview-value">${esc(formatPlannedTime(run.departureTime))}</div>
+          </div>`);
+      }
+      if (run.departurePriority) {
+        const ord = (n) => { const a = ["th","st","nd","rd"], v = n % 100; return n + (a[(v-20)%10] || a[v] || a[0]); };
+        rows.push(`<div class="overview-row" style="background:var(--accent-dim); border-radius:10px; padding:10px 12px;">
+            <div class="overview-label" style="color:var(--accent);">\u{1F6A6} Departure order from the hall</div>
+            <div class="overview-value" style="font-size:20px; font-weight:800; color:var(--accent);">${ord(run.departurePriority)} to leave</div>
+            <div style="font-size:12.5px; color:var(--text-dim); margin-top:2px;">${run.departurePriority === 1 ? "Yours is the first coach out \u2014 be ready to load early." : "Coaches ahead of you load first. Wait for the call."}</div>
           </div>`);
       }
       if (run.plannedArrival) {
@@ -2245,7 +2253,7 @@
       const sub = document.createElement("p");
       sub.className = "subtitle";
       sub.textContent = state.courtesyMode === "departure"
-        ? "Runs heading here, grouped by run with the full passenger count \u2014 tap a run to see its buses."
+        ? "Listed in departure order \u2014 load the coach marked 1st before the others. Tap a run to see its buses."
         : "Runs arriving here, grouped by run with the full passenger count \u2014 tap a run to see its buses.";
       wrap.appendChild(sub);
 
@@ -2319,11 +2327,24 @@
         card.className = "card";
         const headerBtn = document.createElement("button");
         headerBtn.className = "list-btn";
-        const priorityBadge = (isDeparture && run.departurePriority)
-          ? `<span style="display:inline-block; min-width:26px; text-align:center; font-size:13px; font-weight:800; color:#fff; background:var(--accent); border-radius:6px; padding:2px 7px; margin-right:8px;">#${run.departurePriority}</span>`
-          : "";
-        headerBtn.innerHTML = `<div class="run-row">
-            <div><div class="run-id">${priorityBadge}${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+        // Departure order needs to be unmistakable — the courtesy team is
+        // deciding which coach to fill first, so it gets its own labelled
+        // banner across the top of the card rather than a bare number
+        // tucked beside the Run ID.
+        const ordinal = (n) => {
+          const s2 = ["th", "st", "nd", "rd"], v = n % 100;
+          return n + (s2[(v - 20) % 10] || s2[v] || s2[0]);
+        };
+        const priorityBanner = (isDeparture && run.departurePriority)
+          ? `<div style="display:flex; align-items:center; gap:10px; margin:-2px 0 12px; padding:8px 12px; background:var(--accent); border-radius:8px;">
+               <span style="font-size:22px; font-weight:800; color:#fff; line-height:1;">${ordinal(run.departurePriority)}</span>
+               <span style="font-size:11px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:#fff; opacity:.92; font-weight:700;">Departure order \u2014 ${run.departurePriority === 1 ? "load this coach first" : "loads after #" + (run.departurePriority - 1)}</span>
+             </div>`
+          : (isDeparture
+              ? `<div style="margin:-2px 0 12px; padding:8px 12px; background:var(--panel-alt); border:1px dashed var(--border); border-radius:8px; font-size:11.5px; color:var(--text-dim);">No departure order set for this run</div>`
+              : "");
+        headerBtn.innerHTML = `${priorityBanner}<div class="run-row">
+            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
             <div class="chev" style="transform:rotate(${isExpanded ? "90deg" : "0deg"});">\u203A</div>
           </div>
           <div class="stat-strip" style="margin:12px 0 0;">
