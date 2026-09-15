@@ -207,6 +207,9 @@
     "Westfield Hall", "New York Hall", "EWR Terminal A", "EWR Terminal B", "EWR Terminal C",
     "Allentown Airport (ABE)", "Stewart International Airport (SWF)", "Westchester County Airport (HPN)",
     "LGA", "JFK Terminal 8",
+    // Friday boat-trip venues — these runs move real passengers, so their
+    // locations belong in the fixed list like any airport or hall.
+    "Pier 14 - Hoboken", "Delta Hotel - Basking Ridge",
   ];
   const ORIGINS = DESTINATIONS.filter(d => d !== "JFK Terminal 8"); // LGA is allowed as an origin too — only JFK T8 stays destination-only
   const HALL_NAMES = new Set(["Westfield Hall", "New York Hall"]); // the only two locations Courtesy Flow's Arrival to Hall tab should ever show
@@ -863,6 +866,48 @@
       </div>
     `;
     screen.appendChild(card);
+
+    // Timing card — the guide's own arrival time is the headline here.
+    // Guide is due 45 min before the flight; the bus/staging arrival is
+    // 30 min before, so the guide gets a 15-minute head start.
+    if (run.flightTime || run.departureTime || run.plannedArrival) {
+      const timeHeading = document.createElement("h3");
+      timeHeading.textContent = "Timings";
+      timeHeading.style.marginTop = "18px";
+      screen.appendChild(timeHeading);
+      const timeCard = document.createElement("div");
+      timeCard.className = "card";
+      const rows = [];
+      if (run.flightTime) {
+        rows.push(`<div class="overview-row" style="background:var(--brand-dim); border-radius:10px; padding:10px 12px;">
+            <div class="overview-label" style="color:var(--brand);">\u{1F464} You (guide) arrive by</div>
+            <div class="overview-value" style="font-size:20px; font-weight:700; color:var(--brand);">${esc(formatPlannedTime(minusMinutes(run.flightTime, 45)))}</div>
+            <div style="font-size:12px; color:var(--text-dim); margin-top:2px;">45 minutes before the flight \u2014 15 min ahead of the bus</div>
+          </div>`);
+        rows.push(`<div class="overview-row">
+            <div class="overview-label">Bus at staging</div>
+            <div class="overview-value">${esc(formatPlannedTime(minusMinutes(run.flightTime, 30)))} <span style="font-size:12px; color:var(--text-dim);">(30 min before the flight)</span></div>
+          </div>`);
+        rows.push(`<div class="overview-row">
+            <div class="overview-label">Flight arrives</div>
+            <div class="overview-value">${esc(formatPlannedTime(run.flightTime))}</div>
+          </div>`);
+      }
+      if (run.departureTime) {
+        rows.push(`<div class="overview-row">
+            <div class="overview-label">Bus departs</div>
+            <div class="overview-value">${esc(formatPlannedTime(run.departureTime))}${run.departurePriority ? ` <span style="font-size:12px; color:var(--accent); font-weight:600;">\u00b7 departure order #${run.departurePriority}</span>` : ""}</div>
+          </div>`);
+      }
+      if (run.plannedArrival) {
+        rows.push(`<div class="overview-row">
+            <div class="overview-label">Planned arrival at destination</div>
+            <div class="overview-value">${esc(formatPlannedTime(run.plannedArrival))}</div>
+          </div>`);
+      }
+      timeCard.innerHTML = rows.join("");
+      screen.appendChild(timeCard);
+    }
 
     // Full Beginning/During/Arrival preview — everything the guide will see
     // once they start, available here ahead of time. No live status yet, so
@@ -1548,6 +1593,33 @@
       }
       stats.innerHTML = statsHtml(mine, boarded, total);
       bodyHolder.appendChild(stats);
+
+      // Meal breakdown for THIS bus — counts only passengers actually ticked
+      // off as boarded here, so the guide can see exactly how many of each
+      // box type to hand out once everyone is seated.
+      const mealStrip = document.createElement("div");
+      mealStrip.className = "stat-strip";
+      mealStrip.style.marginTop = "8px";
+      function mealCounts() {
+        const c = { regular: 0, allergy: 0, extra: 0 };
+        state.currentRun.manifest.forEach(p => {
+          if (p.boarded && p.busNum === busNum) c[mealCategory(p)]++;
+        });
+        return c;
+      }
+      function mealStripHtml() {
+        const c = mealCounts();
+        return `<div class="stat-box"><div class="num">${c.regular}</div><div class="lbl">Regular</div></div>
+          <div class="stat-box" style="${c.allergy ? "border:1px solid var(--accent);" : ""}"><div class="num" style="${c.allergy ? "color:var(--accent);" : ""}">${c.allergy}</div><div class="lbl">Allergy box</div></div>
+          <div class="stat-box" style="${c.extra ? "border:1px solid var(--brand); background:var(--brand-dim);" : ""}"><div class="num" style="${c.extra ? "color:var(--brand);" : ""}">${c.extra}</div><div class="lbl">Extra special</div></div>`;
+      }
+      mealStrip.innerHTML = mealStripHtml();
+      bodyHolder.appendChild(mealStrip);
+      const mealNote = document.createElement("p");
+      mealNote.className = "subtitle";
+      mealNote.style.cssText = "font-size:12px; margin-top:4px; margin-bottom:10px;";
+      mealNote.textContent = "Meals for passengers boarded on this bus. Extra special boxes are named \u2014 hand each one to that guest only.";
+      bodyHolder.appendChild(mealNote);
       function wireRemainingToggle() {
         const btn = document.getElementById("remaining-toggle");
         if (btn) btn.onclick = () => { state.unboardedOnly = !state.unboardedOnly; renderManifestList(); wireRemainingToggle(); refreshStatsDisplay(); };
@@ -1557,6 +1629,7 @@
         const t2 = totalBoarded(state.currentRun);
         const tot = state.currentRun.manifest.length;
         stats.innerHTML = statsHtml(b2, t2, tot);
+        mealStrip.innerHTML = mealStripHtml();
         wireRemainingToggle();
       }
       wireRemainingToggle();
@@ -2210,6 +2283,13 @@
         const aActive = a.buses.some(bb => bb.status !== "Completed");
         const bActive = b.buses.some(bb => bb.status !== "Completed");
         if (aActive !== bActive) return aActive ? -1 : 1;
+        // Departure view is about WHICH BUS LEAVES FIRST, so it follows the
+        // assigned departure priority. Arrival view stays ordered by ETA.
+        if (state.courtesyMode === "departure") {
+          const aP = a.run.departurePriority || Infinity;
+          const bP = b.run.departurePriority || Infinity;
+          if (aP !== bP) return aP - bP;
+        }
         const aEta = effectiveEtaMinutes(a);
         const bEta = effectiveEtaMinutes(b);
         if (aEta !== bEta) return aEta - bEta;
@@ -2223,19 +2303,46 @@
         const plannedText = formatPlannedTime(run.plannedArrival);
         const runKey = run.runId;
         const isExpanded = state.expandedRunKeys.has(runKey);
+        const isDeparture = state.courtesyMode === "departure";
+
+        // Live ETA across the run's buses: soonest one still moving. Help Desk
+        // and Courtesy Flow watch this constantly, so it has to be unmissable
+        // and it has to be obvious whether it's live or still just the plan.
+        const liveEtas = buses.map(bb => bb.eta).filter(Boolean).sort((x, y) => x - y);
+        const liveEtaText = liveEtas.length ? new Date(liveEtas[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+        const anyInRoute = buses.some(bb => bb.status === "In Route");
+        const allDone = buses.every(bb => bb.status === "Completed");
+        const statusLabel = allDone ? "Arrived" : anyInRoute ? "In route" : buses.some(bb => bb.status === "At Staging") ? "At staging" : "Not started";
+        const statusColor = allDone ? "var(--green)" : anyInRoute ? "var(--brand)" : "var(--text-dim)";
+
         const card = document.createElement("div");
         card.className = "card";
         const headerBtn = document.createElement("button");
         headerBtn.className = "list-btn";
+        const priorityBadge = (isDeparture && run.departurePriority)
+          ? `<span style="display:inline-block; min-width:26px; text-align:center; font-size:13px; font-weight:800; color:#fff; background:var(--accent); border-radius:6px; padding:2px 7px; margin-right:8px;">#${run.departurePriority}</span>`
+          : "";
         headerBtn.innerHTML = `<div class="run-row">
-            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            <div><div class="run-id">${priorityBadge}${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
             <div class="chev" style="transform:rotate(${isExpanded ? "90deg" : "0deg"});">\u203A</div>
           </div>
           <div class="stat-strip" style="margin:12px 0 0;">
             <div class="stat-box"><div class="num">${totalPax}</div><div class="lbl">Passengers</div></div>
             <div class="stat-box"><div class="num">${buses.length}</div><div class="lbl">Bus${buses.length === 1 ? "" : "es"}</div></div>
-            <div class="stat-box"><div class="num" style="font-size:15px;">${plannedText || "\u2014"}</div><div class="lbl">Planned ETA</div></div>
-          </div>`;
+            ${isDeparture
+              ? `<div class="stat-box"><div class="num" style="font-size:15px;">${esc(formatPlannedTime(run.departureTime) || "\u2014")}</div><div class="lbl">Departs</div></div>`
+              : `<div class="stat-box"><div class="num" style="font-size:15px;">${plannedText || "\u2014"}</div><div class="lbl">Planned ETA</div></div>`}
+          </div>
+          ${!isDeparture ? `<div style="display:flex; align-items:center; gap:10px; margin-top:10px; padding:10px 12px; border-radius:10px; background:${liveEtaText ? "var(--brand-dim)" : "var(--panel-alt)"}; border:1px solid ${liveEtaText ? "var(--brand)" : "var(--border)"};">
+              <div style="flex:1;">
+                <div style="font-size:10.5px; font-family:var(--mono); letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim);">Live ETA</div>
+                <div style="font-size:22px; font-weight:800; color:${liveEtaText ? "var(--brand)" : "var(--text-dim)"}; line-height:1.15;">${liveEtaText || "Not live yet"}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:10.5px; font-family:var(--mono); letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim);">Status</div>
+                <div style="font-size:13.5px; font-weight:700; color:${statusColor};">${statusLabel}</div>
+              </div>
+            </div>` : ""}`;
         headerBtn.onclick = () => {
           if (isExpanded) state.expandedRunKeys.delete(runKey); else state.expandedRunKeys.add(runKey);
           render();
@@ -3068,13 +3175,13 @@
 
   async function downloadImportTemplate() {
     const runsData = [
-      ["Run ID", "Description", "Date", "Origin", "Destination", "Planned Arrival Time", "Staging Location", "Number of Buses", "Bus Company",
+      ["Run ID", "Description", "Date", "Origin", "Destination", "Flight Time", "Departure Time", "Departure Priority", "Planned Arrival Time", "Staging Location", "Number of Buses", "Bus Company",
        "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
        "Catering (Yes/No)", "Catering Details",
        "Procedure - Beginning of Run", "Announcement - Beginning of Run",
        "Procedure - During Run", "Announcement - During Run",
        "Procedure - Upon Arrival", "Announcement - Upon Arrival"],
-      ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "15:07", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
+      ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "13:35", "14:05", 1, "15:07", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
        "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
        "Yes", "2x breakfast boxes, bottled water",
        "Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.",
@@ -3118,6 +3225,32 @@
     const d = new Date(dateStr + "T00:00:00");
     if (isNaN(d)) return dateStr;
     return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  }
+  // Meal category from the manifest's Special Needs text. Two categories:
+  // "allergy box" = a standard allergen box; "extra special allergy box" =
+  // a named box for that guest only, which must be walked to them
+  // personally. Matching is deliberately tolerant of case and minor
+  // wording differences so a stray capital never silently miscategorises
+  // someone's meal.
+  function mealCategory(person) {
+    const note = String((person && person.specialNeedsNote) || "").toLowerCase();
+    if (!person || !person.specialNeeds) return "regular";
+    if (note.includes("extra special")) return "extra";
+    return "allergy";
+  }
+  function mealLabel(cat) {
+    return cat === "extra" ? "Extra special" : cat === "allergy" ? "Allergy" : "Regular";
+  }
+  // Guide arrives 45 min before the flight; the bus/staging arrival is 30 min
+  // before. Both are shown so the 15-minute head start is unmistakable.
+  function minusMinutes(hhmm, mins) {
+    if (!hhmm) return "";
+    const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+    if (!m) return "";
+    let total = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) - mins;
+    while (total < 0) total += 24 * 60;
+    const h = Math.floor(total / 60) % 24, mi = total % 60;
+    return String(h).padStart(2, "0") + ":" + String(mi).padStart(2, "0");
   }
   function formatPlannedTime(hhmm) {
     if (!hhmm) return "";
@@ -3172,6 +3305,12 @@
         date: parseDateCell(row["Date"]),
         origin: originMatch || originRaw, destination: destMatch || destRaw,
         plannedArrival: parseTimeCell(row["Planned Arrival Time"]) || null,
+        flightTime: parseTimeCell(row["Flight Time"]) || null,
+        departureTime: parseTimeCell(row["Departure Time"]) || null,
+        departurePriority: (function () {
+          const v = parseInt(row["Departure Priority"], 10);
+          return Number.isFinite(v) ? v : null;
+        })(),
         stagingLocation: String(row["Staging Location"] || "").trim(),
         busCompany: companyMatch || companyRaw,
         catering: ["yes", "y", "true"].includes(cateringVal),
