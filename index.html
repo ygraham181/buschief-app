@@ -2320,21 +2320,35 @@
     const groups = groupRunsByLocation(dayRuns, field);
     const locKeys = Object.keys(groups).sort((a, b) => groups[a].label.localeCompare(groups[b].label));
 
-    if (state.courtesySelectedDestination && groups[state.courtesySelectedDestination]) {
-      const g = groups[state.courtesySelectedDestination];
-      const backBtn = document.createElement("button");
-      backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All locations";
-      backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
-      wrap.appendChild(backBtn);
+    // Departure skips the by-destination step entirely: the courtesy team is
+    // filling coaches in departure order, not picking an airport first. So
+    // the day selection drops straight into one flat, ordered list of runs.
+    const isFlatDeparture = state.courtesyMode === "departure";
 
-      const heading = document.createElement("h2");
-      heading.textContent = g.label;
-      wrap.appendChild(heading);
+    if (isFlatDeparture || (state.courtesySelectedDestination && groups[state.courtesySelectedDestination])) {
+      const g = isFlatDeparture
+        ? { label: "", entries: Object.values(groups).flatMap(gr => gr.entries) }
+        : groups[state.courtesySelectedDestination];
+
+      if (!isFlatDeparture) {
+        const backBtn = document.createElement("button");
+        backBtn.className = "link-btn"; backBtn.style.marginBottom = "14px"; backBtn.textContent = "\u2190 All locations";
+        backBtn.onclick = () => { state.courtesySelectedDestination = null; render(); };
+        wrap.appendChild(backBtn);
+
+        const heading = document.createElement("h2");
+        heading.textContent = g.label;
+        wrap.appendChild(heading);
+      } else {
+        const heading = document.createElement("h2");
+        heading.textContent = "Departures" + (state.courtesySelectedDay ? " \u2014 " + formatDateLabel(state.courtesySelectedDay) : "");
+        wrap.appendChild(heading);
+      }
 
       const sub = document.createElement("p");
       sub.className = "subtitle";
-      sub.textContent = state.courtesyMode === "departure"
-        ? "Listed in departure order \u2014 load the coach marked 1st before the others. Tap a run to see its buses."
+      sub.textContent = isFlatDeparture
+        ? "Every coach leaving the halls, in departure order. Load the run marked 1st before the others \u2014 tap a run to see its buses."
         : "Runs arriving here, grouped by run with the full passenger count \u2014 tap a run to see its buses.";
       wrap.appendChild(sub);
 
@@ -2375,6 +2389,10 @@
         // Departure view is about WHICH BUS LEAVES FIRST, so it follows the
         // assigned departure priority. Arrival view stays ordered by ETA.
         if (state.courtesyMode === "departure") {
+          // Group by originating hall first so each hall's 1st, 2nd, 3rd...
+          // reads as one clean sequence instead of interleaving two halls.
+          const aO = a.run.origin || "", bO = b.run.origin || "";
+          if (aO !== bO) return aO.localeCompare(bO);
           const aP = a.run.departurePriority || Infinity;
           const bP = b.run.departurePriority || Infinity;
           if (aP !== bP) return aP - bP;
@@ -2416,16 +2434,22 @@
           const s2 = ["th", "st", "nd", "rd"], v = n % 100;
           return n + (s2[(v - 20) % 10] || s2[v] || s2[0]);
         };
+        // Priority is assigned per hall, so on a flat list the origin has to be
+        // named — otherwise two different halls both show a "1st to leave".
         const priorityBanner = (isDeparture && run.departurePriority)
           ? `<div style="display:flex; align-items:center; gap:10px; margin:-2px 0 12px; padding:8px 12px; background:var(--accent); border-radius:8px;">
-               <span style="font-size:22px; font-weight:800; color:#fff; line-height:1;">${ordinal(run.departurePriority)}</span>
-               <span style="font-size:11px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:#fff; opacity:.92; font-weight:700;">Departure order \u2014 ${run.departurePriority === 1 ? "load this coach first" : "loads after #" + (run.departurePriority - 1)}</span>
+               <span style="font-size:22px; font-weight:800; color:#fff; line-height:1; white-space:nowrap;">${ordinal(run.departurePriority)}</span>
+               <span style="font-size:11px; font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; color:#fff; opacity:.92; font-weight:700;">out of ${esc(run.origin || "the hall")}</span>
              </div>`
           : (isDeparture
               ? `<div style="margin:-2px 0 12px; padding:8px 12px; background:var(--panel-alt); border:1px dashed var(--border); border-radius:8px; font-size:11.5px; color:var(--text-dim);">No departure order set for this run</div>`
               : "");
         headerBtn.innerHTML = `${priorityBanner}<div class="run-row">
-            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div></div>
+            <div><div class="run-id">${esc(run.runId)}</div><div class="run-desc">${esc(run.description || "")}</div>${
+              // With no location drill-down on departures, each card has to
+              // say where it's actually going.
+              isDeparture ? `<div class="run-desc" style="margin-top:2px; color:var(--brand); font-weight:600;">\u2192 ${esc(run.destination || "")}</div>` : ""
+            }</div>
             <div class="chev" style="transform:rotate(${isExpanded ? "90deg" : "0deg"});">\u203A</div>
           </div>
           <div class="stat-strip" style="margin:12px 0 0;">
