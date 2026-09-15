@@ -212,6 +212,7 @@
     "Pier 14 - Hoboken", "Delta Hotel - Basking Ridge",
   ];
   const ORIGINS = DESTINATIONS.filter(d => d !== "JFK Terminal 8"); // LGA is allowed as an origin too — only JFK T8 stays destination-only
+  const MAX_BUSES = 12; // guide slots per run — some runs carry more guides than coaches
   const HALL_NAMES = new Set(["Westfield Hall", "New York Hall"]); // the only two locations Courtesy Flow's Arrival to Hall tab should ever show
   const AUTH_SESSION_MS = 60 * 60 * 1000; // stay signed in for 60 minutes of inactivity — applies to every role, not just the coordinator
   function getChecklistItems(run) {
@@ -255,6 +256,7 @@
     expandedLocationKeys: new Set(),
     expandedNotBoardedKeys: new Set(),
     expandedRunKeys: new Set(),
+    expandedGuestPhoneKeys: new Set(),
     courtesyMode: "arrival",
     unboardedOnly: false,
     specialNeedsOnly: false,
@@ -448,8 +450,12 @@
     let pin; do { pin = String(Math.floor(1000 + Math.random() * 9000)); } while (existing.some(g => g.pin === pin));
     return pin;
   }
-  function computeAssignedGuides(buses) {
-    return Array.from(new Set(buses.map(b => b.guideName).filter(Boolean)));
+  function computeAssignedGuides(buses, extraGuides) {
+    // A run can carry more guides than coaches (a 12-guide, 8-coach boat run,
+    // for example). Extra guides are real people who must still be able to
+    // sign in and see the run, so they count as assigned too.
+    const fromBuses = buses.map(b => b.guideName).filter(Boolean);
+    return Array.from(new Set(fromBuses.concat(extraGuides || [])));
   }
 
   // ---------- Geocoding: turn Origin/Destination/Staging text into map coordinates ----------
@@ -947,6 +953,18 @@
         <div class="bus-detail-meta">${b.guideName ? esc(b.guideName) : "No guide checked in yet"}</div></div></div>`;
       busCard.appendChild(row);
     });
+    // Guides rostered to this run beyond the coach count — shown so nobody
+    // rostered is invisible just because there are more guides than coaches.
+    if (run.extraGuides && run.extraGuides.length) {
+      const extraRow = document.createElement("div");
+      extraRow.className = "bus-detail-row";
+      extraRow.innerHTML = `<div style="flex:1;">
+          <div class="bus-detail-meta" style="font-weight:700; color:var(--brand); margin-bottom:2px;">Also on this run (${run.extraGuides.length})</div>
+          <div class="bus-detail-meta">${run.extraGuides.map(g => esc(g)).join(" \u00b7 ")}</div>
+          <div class="bus-detail-meta" style="font-size:11px; margin-top:2px;">More guides than coaches \u2014 team lead to allocate on the day.</div>
+        </div>`;
+      busCard.appendChild(extraRow);
+    }
     screen.appendChild(busCard);
 
     const btn = document.createElement("button");
@@ -1628,6 +1646,20 @@
       mealNote.style.cssText = "font-size:12px; margin-top:4px; margin-bottom:10px;";
       mealNote.textContent = "Meals for passengers boarded on this bus. Extra special boxes are named \u2014 hand each one to that guest only.";
       bodyHolder.appendChild(mealNote);
+
+      // Who's still missing, across the whole run (boarding is fluid between
+      // buses, so this is run-wide, not just this coach). Same component the
+      // Courtesy Flow and Help Desk screens use, so tapping a name reveals
+      // that guest's mobile number here too.
+      const notBoardedHolder = document.createElement("div");
+      notBoardedHolder.style.cssText = "margin-bottom:14px;";
+      bodyHolder.appendChild(notBoardedHolder);
+      function renderGuideNotBoarded() {
+        notBoardedHolder.innerHTML = "";
+        renderNotBoardedToggle(notBoardedHolder, state.currentRun);
+      }
+      renderGuideNotBoarded();
+
       function wireRemainingToggle() {
         const btn = document.getElementById("remaining-toggle");
         if (btn) btn.onclick = () => { state.unboardedOnly = !state.unboardedOnly; renderManifestList(); wireRemainingToggle(); refreshStatsDisplay(); };
@@ -1638,6 +1670,7 @@
         const tot = state.currentRun.manifest.length;
         stats.innerHTML = statsHtml(b2, t2, tot);
         mealStrip.innerHTML = mealStripHtml();
+        renderGuideNotBoarded();
         wireRemainingToggle();
       }
       wireRemainingToggle();
@@ -1689,7 +1722,26 @@
           row.className = "pax-row" + (mineRow ? " boarded-mine" : "") + (otherRow ? " boarded-other" : "");
           const noteHtml = (p.specialNeeds && p.specialNeedsNote)
             ? `<div style="font-size:11px; color:var(--accent); margin-top:2px;">\u2b50 ${esc(p.specialNeedsNote)}</div>` : "";
-          row.innerHTML = `<div class="checkbox">${p.boarded ? "\u2713" : ""}</div><div class="pax-name" style="flex:1;"><div>${p.specialNeeds ? "\u2b50 " : ""}${esc(p.name)}</div>${noteHtml}</div>${otherRow ? `<div class="pax-tag">Bus ${p.busNum}${otherGuide ? " \u00b7 " + esc(otherGuide) : ""}</div>` : ""}`;
+          const phoneKey = run.runId + "::" + p.id;
+          const phoneOpen = state.expandedGuestPhoneKeys.has(phoneKey);
+          row.innerHTML = `<div class="checkbox">${p.boarded ? "\u2713" : ""}</div><div class="pax-name" style="flex:1;"><div>${p.specialNeeds ? "\u2b50 " : ""}${esc(p.name)}</div>${noteHtml}${
+            phoneOpen
+              ? (p.phone
+                  ? `<div style="margin-top:4px;"><a href="tel:${esc(String(p.phone).replace(/[^0-9+]/g, ""))}" style="font-size:13.5px; font-weight:600; color:var(--brand); text-decoration:none;">\u{1F4DE} ${esc(p.phone)}</a><span style="font-size:11px; color:var(--text-dim); margin-left:6px;">tap to call</span></div>`
+                  : `<div style="margin-top:4px; font-size:12px; color:var(--text-dim);">No mobile number on file</div>`)
+              : ""
+          }</div>${otherRow ? `<div class="pax-tag">Bus ${p.busNum}${otherGuide ? " \u00b7 " + esc(otherGuide) : ""}</div>` : ""}<button class="pax-phone-btn" style="all:unset; cursor:pointer; padding:6px 8px; font-size:15px; opacity:${phoneOpen ? "1" : "0.45"};" title="Show mobile number">\u{1F4DE}</button>`;
+          // The phone button is deliberately separate from the row's own tap
+          // target — tapping it must never board or un-board someone.
+          const phoneBtn = row.querySelector(".pax-phone-btn");
+          if (phoneBtn) {
+            phoneBtn.onclick = (e) => {
+              e.stopPropagation();
+              if (phoneOpen) state.expandedGuestPhoneKeys.delete(phoneKey);
+              else state.expandedGuestPhoneKeys.add(phoneKey);
+              renderManifestList();
+            };
+          }
           if (!otherRow) {
             row.onclick = async () => {
               const personId = p.id;
@@ -2153,9 +2205,38 @@
         listBox.innerHTML = `<div style="padding:10px 0; font-size:13px; color:var(--text-dim);">Everyone's boarded.</div>`;
       } else {
         notBoarded.slice(0, 300).forEach(p => {
+          // Tap a name to reveal that guest's mobile number, so a guide can
+          // call someone who hasn't shown up without leaving the screen.
+          // Numbers come from the manifest upload; until they're loaded the
+          // row says so plainly rather than looking broken.
+          const pKey = run.runId + "::" + p.id;
+          const isShown = state.expandedGuestPhoneKeys.has(pKey);
           const row = document.createElement("div");
-          row.style.cssText = "padding:6px 0; font-size:13.5px; border-bottom:1px solid var(--border);";
-          row.textContent = p.name;
+          row.style.cssText = "padding:6px 0; border-bottom:1px solid var(--border);";
+
+          const nameBtn = document.createElement("button");
+          nameBtn.style.cssText = "all:unset; cursor:pointer; display:flex; align-items:center; justify-content:space-between; width:100%; font-size:13.5px; color:var(--text);";
+          nameBtn.innerHTML = `<span>${esc(p.name)}</span>
+            <span style="font-size:11px; color:var(--text-dim);">${isShown ? "\u25B2" : "\u{1F4DE}"}</span>`;
+          nameBtn.onclick = () => {
+            if (isShown) state.expandedGuestPhoneKeys.delete(pKey);
+            else state.expandedGuestPhoneKeys.add(pKey);
+            render();
+          };
+          row.appendChild(nameBtn);
+
+          if (isShown) {
+            const detail = document.createElement("div");
+            detail.style.cssText = "padding:6px 0 2px;";
+            const phone = (p.phone || "").trim();
+            if (phone) {
+              detail.innerHTML = `<a href="tel:${esc(phone.replace(/[^0-9+]/g, ""))}" style="font-size:14px; font-weight:600; color:var(--brand); text-decoration:none;">\u{1F4DE} ${esc(phone)}</a>
+                <div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">Tap to call</div>`;
+            } else {
+              detail.innerHTML = `<div style="font-size:12.5px; color:var(--text-dim);">No mobile number on file for this guest.</div>`;
+            }
+            row.appendChild(detail);
+          }
           listBox.appendChild(row);
         });
         if (notBoarded.length > 300) {
@@ -3197,13 +3278,14 @@
   async function downloadImportTemplate() {
     const runsData = [
       ["Run ID", "Description", "Date", "Origin", "Destination", "Flight Time", "Departure Time", "Departure Priority", "Planned Arrival Time", "Staging Location", "Number of Buses", "Bus Company",
-       "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide", "Bus 7 Guide", "Bus 8 Guide",
+       "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide",
+       "Bus 7 Guide", "Bus 8 Guide", "Bus 9 Guide", "Bus 10 Guide", "Bus 11 Guide", "Bus 12 Guide",
        "Catering (Yes/No)", "Catering Details",
        "Procedure - Beginning of Run", "Announcement - Beginning of Run",
        "Procedure - During Run", "Announcement - During Run",
        "Procedure - Upon Arrival", "Announcement - Upon Arrival"],
       ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "13:35", "14:05", 1, "15:07", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
-       "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "",
+       "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "", "", "", "", "",
        "Yes", "2x breakfast boxes, bottled water",
        "Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.",
        "Welcome aboard! Please have your badge visible for the driver.",
@@ -3213,10 +3295,10 @@
        "Please take all belongings. Follow signage to registration."],
     ];
     const manifestData = [
-      ["Run ID", "Passenger Name", "Special Needs"],
-      ["RUN-001", "Jane Rider", ""],
-      ["RUN-001", "John Traveler", "Wheelchair access"],
-      ["RUN-001", "Alex Guest", "Vegetarian meal"],
+      ["Run ID", "Passenger Name", "Special Needs", "Mobile"],
+      ["RUN-001", "Jane Rider", "", "+1 555 010 2233"],
+      ["RUN-001", "John Traveler", "Allergy box", "+1 555 010 4455"],
+      ["RUN-001", "Alex Guest", "Extra special allergy box", ""],
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(runsData), "Runs");
@@ -3298,8 +3380,12 @@
       const name = String(row["Passenger Name"] || row["Name"] || "").trim();
       if (!rid || !name) return;
       const specialNeeds = String(row["Special Needs"] || "").trim();
+      // Accept the common spellings so the column works whichever header
+      // the manifest happens to use.
+      const phone = String(row["Mobile"] || row["Mobile Number"] || row["Phone"] ||
+                           row["Phone Number"] || row["Guest Mobile"] || "").trim();
       if (!manifestByRun[rid]) manifestByRun[rid] = [];
-      manifestByRun[rid].push({ name, specialNeeds });
+      manifestByRun[rid].push({ name, specialNeeds, phone });
     });
 
     let created = 0, skipped = 0, manifestsUpdated = 0, passengersAdded = 0, passengersUpdated = 0, routeDetailsUpdated = 0;
@@ -3363,13 +3449,18 @@
             if (existing) {
               const newFlag = !!p.specialNeeds;
               const newNote = p.specialNeeds || "";
-              if (existing.specialNeeds !== newFlag || existing.specialNeedsNote !== newNote) {
-                existing.specialNeeds = newFlag; existing.specialNeedsNote = newNote; updated++;
+              const newPhone = p.phone || "";
+              if (existing.specialNeeds !== newFlag || existing.specialNeedsNote !== newNote ||
+                  (newPhone && (existing.phone || "") !== newPhone)) {
+                existing.specialNeeds = newFlag; existing.specialNeedsNote = newNote;
+                // only overwrite a stored number when the sheet actually has one
+                if (newPhone) existing.phone = newPhone;
+                updated++;
               }
             } else {
               fresh.manifest.push({
                 id: runId + "-imp-" + Date.now() + "-" + added, name: p.name, boarded: false, busNum: null, boardedAt: null,
-                specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "",
+                specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "", phone: p.phone || "",
               });
               added++;
             }
@@ -3378,12 +3469,22 @@
         if (result) { routeDetailsUpdated++; manifestsUpdated++; passengersAdded += added; passengersUpdated += updated; }
         continue;
       }
-      const numBuses = Math.max(1, Math.min(8, parseInt(row["Number of Buses"], 10) || 1));
+      const numBuses = Math.max(1, Math.min(MAX_BUSES, parseInt(row["Number of Buses"], 10) || 1));
       const people = manifestByRun[runId] || [];
       const manifest = people.map((p, i) => ({
         id: runId + "-" + i, name: p.name, boarded: false, busNum: null, boardedAt: null,
-        specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "",
+        specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "", phone: p.phone || "",
       }));
+      // Any guide named beyond the coach count is kept as an extra rather
+      // than silently dropped — these are real people rostered to the run.
+      const extraGuides = [];
+      for (let gi = numBuses; gi < MAX_BUSES; gi++) {
+        const raw = String(row["Bus " + (gi + 1) + " Guide"] || "").trim();
+        if (!raw) continue;
+        const match = roster.find(g => g.name.toLowerCase() === raw.toLowerCase());
+        if (match) extraGuides.push(match.name);
+        else { unmatchedGuides.add(raw); extraGuides.push(raw); }
+      }
       const buses = Array.from({ length: numBuses }, (_, i) => {
         const raw = String(row["Bus " + (i + 1) + " Guide"] || "").trim();
         let guideName = "";
@@ -3401,10 +3502,10 @@
       });
       const run = {
         runId, ...routeDetails,
-        numBuses, buses, manifest, createdAt: Date.now(),
+        numBuses, buses, manifest, extraGuides, createdAt: Date.now(),
       };
       await saveRun(run);
-      newIndexEntries.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses) });
+      newIndexEntries.push({ runId, description: run.description, numBuses, createdAt: run.createdAt, assignedGuides: computeAssignedGuides(buses, extraGuides) });
       created++;
     }
     // Append to whatever the CURRENT run-index actually is at write time —
@@ -3511,7 +3612,7 @@
     const stageLabel = document.createElement("label"); stageLabel.textContent = "Staging location";
     const stageInput = document.createElement("input"); stageInput.type = "text"; stageInput.placeholder = "e.g. JFK Cell Phone Lot";
     const busLabel = document.createElement("label"); busLabel.textContent = "Number of buses";
-    const busInput = document.createElement("input"); busInput.type = "number"; busInput.min = "1"; busInput.max = "8"; busInput.value = "2";
+    const busInput = document.createElement("input"); busInput.type = "number"; busInput.min = "1"; busInput.max = String(MAX_BUSES); busInput.value = "2";
     const companyLabel = document.createElement("label"); companyLabel.textContent = "Bus company";
     const companySelect = document.createElement("select");
     const companyBlankOpt = document.createElement("option");
@@ -3541,7 +3642,7 @@
 
     let rosterCache = [];
     function rebuildGuideSelects() {
-      const n = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
+      const n = Math.max(1, Math.min(MAX_BUSES, parseInt(busInput.value, 10) || 1));
       const priorValues = Array.from(guideAssignHolder.querySelectorAll("select")).map(s => s.value);
       guideAssignHolder.innerHTML = "";
       for (let i = 1; i <= n; i++) {
@@ -3648,7 +3749,7 @@
       const runId = runIdInput.value.trim();
       if (!runId) { showToast("Enter a Run ID"); return; }
       if (state.runIndex.some(r => r.runId === runId)) { showToast("That Run ID already exists"); return; }
-      const numBuses = Math.max(1, Math.min(8, parseInt(busInput.value, 10) || 1));
+      const numBuses = Math.max(1, Math.min(MAX_BUSES, parseInt(busInput.value, 10) || 1));
       const names = manifestArea.value.split("\n").map(n => n.trim()).filter(Boolean);
       const specialNeedsMap = {};
       let unmatchedSpecialNeeds = 0;
