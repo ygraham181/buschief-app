@@ -258,6 +258,7 @@
     expandedNotBoardedKeys: new Set(),
     expandedRunKeys: new Set(),
     expandedGuestPhoneKeys: new Set(),
+    expandedBusPaxKeys: new Set(),
     paxToolMode: "remove",        // "remove" | "add"
     paxToolQuery: "",
     paxSelectedNames: new Set(),  // names picked for a bulk action
@@ -2768,6 +2769,38 @@
                 busRow.appendChild(staleness);
                 setTimeout(() => initMiniMap(mapDiv.id, bus.loc.lat, bus.loc.lng, bus.guideName || ("Bus " + bus.num)), 0);
               }
+            }
+            // Who's actually on this coach. Read-only — the courtesy team is
+            // answering "which bus is my family on?", not boarding anyone.
+            const paxKey = run.runId + "::bus" + bus.num;
+            const onThisBus = (run.manifest || []).filter(p => p.boarded && p.busNum === bus.num);
+            const paxOpen = state.expandedBusPaxKeys.has(paxKey);
+            const paxBtn = document.createElement("button");
+            paxBtn.className = "link-btn";
+            paxBtn.style.cssText = "margin-top:6px; font-size:12px; display:block;";
+            paxBtn.textContent = (paxOpen ? "\u25B2 Hide" : "\u25BC View") + ` who's on Bus ${bus.num} (${onThisBus.length})`;
+            paxBtn.onclick = (e) => {
+              e.stopPropagation();
+              if (paxOpen) state.expandedBusPaxKeys.delete(paxKey);
+              else state.expandedBusPaxKeys.add(paxKey);
+              render();
+            };
+            busRow.appendChild(paxBtn);
+            if (paxOpen) {
+              const paxBox = document.createElement("div");
+              paxBox.style.cssText = "margin-top:6px; background:var(--panel-alt); border-radius:8px; padding:8px 10px; max-height:260px; overflow-y:auto;";
+              if (!onThisBus.length) {
+                paxBox.innerHTML = `<div style="font-size:12.5px; color:var(--text-dim);">No one has boarded this bus yet.</div>`;
+              } else {
+                paxBox.innerHTML = onThisBus.slice().sort((x, y) => x.name.localeCompare(y.name)).map(pp => {
+                  const cat = mealCategory(pp);
+                  return `<div style="display:flex; justify-content:space-between; gap:8px; padding:4px 0; font-size:13px; border-bottom:1px solid var(--border);">
+                      <span>${pp.specialNeeds ? "\u2b50 " : ""}${esc(pp.name)}</span>
+                      ${cat !== "regular" ? `<span style="font-size:11px; font-weight:700; white-space:nowrap; color:${mealColor(cat)};">${esc(mealLabel(cat))}</span>` : ""}
+                    </div>`;
+                }).join("");
+              }
+              busRow.appendChild(paxBox);
             }
             busList.appendChild(busRow);
           });
