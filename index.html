@@ -266,6 +266,7 @@
     paxAddNeeds: "",
     manifestCatFilter: "all",
     guideAddNames: "",
+    coordRunQuery: "",
     exportScope: "boarded",
     exportGrouping: "bybus",
     exportBackView: "coord-run-detail",
@@ -2149,7 +2150,67 @@
     listHeading.style.margin = "22px 0 8px";
     wrap.appendChild(listHeading);
 
-    runs.slice().sort((a, b) => a.runId.localeCompare(b.runId)).forEach(run => {
+    const runSearch = document.createElement("input");
+    runSearch.type = "search";
+    runSearch.placeholder = "Search runs \u2014 ID, description, origin, destination, guide\u2026";
+    runSearch.value = state.coordRunQuery || "";
+    runSearch.style.cssText = "width:100%; margin-bottom:10px;";
+    runSearch.oninput = e => { state.coordRunQuery = e.target.value; renderRunCards(); };
+    wrap.appendChild(runSearch);
+
+    const runCountLine = document.createElement("p");
+    runCountLine.className = "subtitle";
+    runCountLine.style.cssText = "font-size:12px; margin:-4px 0 8px;";
+    wrap.appendChild(runCountLine);
+
+    const runListHolder = document.createElement("div");
+    wrap.appendChild(runListHolder);
+
+    // Sort the way the IDs read rather than plain alphabetical: plain
+    // localeCompare keys on the airport code in the middle of
+    // C-MMDD-ORIG-DEST-Cnnn, which scrambles the Cnnn sequence. Sort by
+    // date, then the trailing run number, then the whole ID as a tiebreak.
+    function runSortKey(runId) {
+      const id = String(runId || "");
+      const dm = id.match(/^C-(\d{4})/);
+      const sm = id.match(/C(\d+)\s*$/);
+      return {
+        date: dm ? parseInt(dm[1], 10) : 99999,
+        seq: sm ? parseInt(sm[1], 10) : 999999,
+        raw: id,
+      };
+    }
+    function compareRuns(a, b) {
+      const ka = runSortKey(a.runId), kb = runSortKey(b.runId);
+      if (ka.date !== kb.date) return ka.date - kb.date;
+      if (ka.seq !== kb.seq) return ka.seq - kb.seq;
+      return ka.raw.localeCompare(kb.raw);
+    }
+
+    function renderRunCards() {
+      runListHolder.innerHTML = "";
+      const q = String(state.coordRunQuery || "").trim().toLowerCase();
+      const shown = runs.filter(run => {
+        if (!q) return true;
+        const hay = [
+          run.runId, run.description, run.origin, run.destination, run.busCompany,
+          ...(run.buses || []).map(b => b.guideName),
+        ].filter(Boolean).join(" ").toLowerCase();
+        return hay.includes(q);
+      }).slice().sort(compareRuns);
+
+      runCountLine.textContent = q
+        ? `${shown.length} of ${runs.length} run(s) match`
+        : `${runs.length} run(s)`;
+
+      if (!shown.length) {
+        runListHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No runs match \u201c${esc(state.coordRunQuery)}\u201d.</div>`;
+        return;
+      }
+      shown.forEach(renderOneRunCard);
+    }
+
+    function renderOneRunCard(run) {
       const boarded = totalBoarded(run);
       const total = run.manifest.length;
       const agg = aggregateStatus(run);
@@ -2163,8 +2224,16 @@
         <div class="run-row"><span class="status-pill ${STATUS_CLASS(agg)}"><span class="sdot"></span>${agg}</span><span style="font-family:var(--mono); font-size:13px;">${boarded} / ${total} boarded</span></div>`;
       btn.onclick = async () => { stopPolling(); state.currentRun = await loadRun(run.runId); go("coord-run-detail"); };
       card.appendChild(btn);
-      wrap.appendChild(card);
-    });
+      runListHolder.appendChild(card);
+    }
+
+    renderRunCards();
+    setTimeout(() => {
+      if (state.coordRunQuery) {
+        runSearch.focus();
+        runSearch.setSelectionRange(runSearch.value.length, runSearch.value.length);
+      }
+    }, 0);
 
     return wrap;
   }
