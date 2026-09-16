@@ -257,6 +257,13 @@
     expandedNotBoardedKeys: new Set(),
     expandedRunKeys: new Set(),
     expandedGuestPhoneKeys: new Set(),
+    paxToolMode: "remove",        // "remove" | "add"
+    paxToolQuery: "",
+    paxSelectedNames: new Set(),  // names picked for a bulk action
+    paxSelectedRunIds: new Set(), // runs picked for a bulk action
+    paxAddNames: "",              // typed names survive re-renders
+    paxAddNeeds: "",
+    manifestCatFilter: "all",
     courtesyMode: "arrival",
     unboardedOnly: false,
     specialNeedsOnly: false,
@@ -497,7 +504,7 @@
     return Math.floor(s / 3600) + "h ago";
   }
 
-  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes"]);
+  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes", "coord-edit-run"]);
 
   function render() {
     // Any activity while on a coordinator screen keeps the 10-minute session alive.
@@ -528,6 +535,7 @@
       "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
       "coord-sheet-settings": renderCoordSheetSettings,
       "coord-manifest-edit": renderCoordManifestEdit, "coord-edit-notes": renderCoordEditNotes,
+      "coord-edit-run": renderCoordEditRun,
     };
     wrap.appendChild(views[state.view]());
     root.appendChild(wrap);
@@ -966,6 +974,68 @@
       busCard.appendChild(extraRow);
     }
     screen.appendChild(busCard);
+
+    // Read-only manifest preview. Deliberately NOT tickable — boarding only
+    // happens on the execute screen, so a guide reading ahead can't
+    // accidentally mark someone aboard.
+    if (run.manifest && run.manifest.length) {
+      const manLabel = document.createElement("h3");
+      manLabel.textContent = "Passenger manifest";
+      manLabel.style.marginTop = "18px";
+      screen.appendChild(manLabel);
+
+      const manNote = document.createElement("p");
+      manNote.className = "subtitle";
+      manNote.style.cssText = "margin-top:-6px; font-size:12.5px;";
+      manNote.textContent = "View only \u2014 tick names off on the run itself once you start boarding.";
+      screen.appendChild(manNote);
+
+      const manCard = document.createElement("div");
+      manCard.className = "card";
+      const sn = run.manifest.filter(p => p.specialNeeds);
+      const counts = { regular: 0, allergy: 0, extra: 0, other: 0 };
+      run.manifest.forEach(p => counts[mealCategory(p)]++);
+      manCard.innerHTML = `<div class="stat-strip" style="margin-bottom:10px;">
+          <div class="stat-box"><div class="num">${run.manifest.length}</div><div class="lbl">Total</div></div>
+          <div class="stat-box"><div class="num" style="${counts.allergy ? "color:var(--accent);" : ""}">${counts.allergy}</div><div class="lbl">Allergy box</div></div>
+          <div class="stat-box"><div class="num" style="${counts.extra ? "color:var(--brand);" : ""}">${counts.extra}</div><div class="lbl">Extra special</div></div>
+          <div class="stat-box"><div class="num" style="${counts.other ? "color:var(--status-amber);" : ""}">${counts.other}</div><div class="lbl">Other need</div></div>
+        </div>`;
+
+      const search = document.createElement("input");
+      search.type = "search"; search.placeholder = "Search this manifest\u2026";
+      search.style.cssText = "width:100%; margin-bottom:8px;";
+      manCard.appendChild(search);
+
+      const listBox = document.createElement("div");
+      listBox.style.cssText = "max-height:340px; overflow-y:auto;";
+      manCard.appendChild(listBox);
+
+      function renderList() {
+        const q = search.value.trim().toLowerCase();
+        const shown = q ? run.manifest.filter(p => p.name.toLowerCase().includes(q)) : run.manifest;
+        listBox.innerHTML = "";
+        if (!shown.length) {
+          listBox.innerHTML = `<div class="empty-state" style="padding:14px 0;">No matching names.</div>`;
+          return;
+        }
+        shown.forEach(p => {
+          const cat = mealCategory(p);
+          const row = document.createElement("div");
+          row.style.cssText = "padding:7px 0; border-bottom:1px solid var(--border); font-size:13.5px; display:flex; justify-content:space-between; gap:8px; align-items:center;";
+          row.innerHTML = `<span>${p.specialNeeds ? "\u2b50 " : ""}${esc(p.name)}</span>${
+            cat !== "regular"
+              ? `<span style="font-size:11px; font-weight:700; white-space:nowrap; color:${mealColor(cat)};">${esc(mealLabel(cat))}</span>`
+              : ""
+          }`;
+          listBox.appendChild(row);
+        });
+        if (!q && run.manifest.length > shown.length) return;
+      }
+      search.oninput = renderList;
+      renderList();
+      screen.appendChild(manCard);
+    }
 
     const btn = document.createElement("button");
     btn.className = "btn btn-primary"; btn.style.marginTop = "18px"; btn.textContent = "Execute this route";
@@ -1627,7 +1697,7 @@
       mealStrip.className = "stat-strip";
       mealStrip.style.marginTop = "8px";
       function mealCounts() {
-        const c = { regular: 0, allergy: 0, extra: 0 };
+        const c = { regular: 0, allergy: 0, extra: 0, other: 0 };
         state.currentRun.manifest.forEach(p => {
           if (p.boarded && p.busNum === busNum) c[mealCategory(p)]++;
         });
@@ -1637,14 +1707,15 @@
         const c = mealCounts();
         return `<div class="stat-box"><div class="num">${c.regular}</div><div class="lbl">Regular</div></div>
           <div class="stat-box" style="${c.allergy ? "border:1px solid var(--accent);" : ""}"><div class="num" style="${c.allergy ? "color:var(--accent);" : ""}">${c.allergy}</div><div class="lbl">Allergy box</div></div>
-          <div class="stat-box" style="${c.extra ? "border:1px solid var(--brand); background:var(--brand-dim);" : ""}"><div class="num" style="${c.extra ? "color:var(--brand);" : ""}">${c.extra}</div><div class="lbl">Extra special</div></div>`;
+          <div class="stat-box" style="${c.extra ? "border:1px solid var(--brand); background:var(--brand-dim);" : ""}"><div class="num" style="${c.extra ? "color:var(--brand);" : ""}">${c.extra}</div><div class="lbl">Extra special</div></div>
+          <div class="stat-box" style="${c.other ? "border:1px solid var(--status-amber);" : ""}"><div class="num" style="${c.other ? "color:var(--status-amber);" : ""}">${c.other}</div><div class="lbl">Other need</div></div>`;
       }
       mealStrip.innerHTML = mealStripHtml();
       bodyHolder.appendChild(mealStrip);
       const mealNote = document.createElement("p");
       mealNote.className = "subtitle";
       mealNote.style.cssText = "font-size:12px; margin-top:4px; margin-bottom:10px;";
-      mealNote.textContent = "Meals for passengers boarded on this bus. Extra special boxes are named \u2014 hand each one to that guest only.";
+      mealNote.textContent = "Meals for passengers boarded on this bus. Extra special boxes are named \u2014 hand each one to that guest only. \u201cOther need\u201d is a non-food need (mobility, assistance) \u2014 no box required.";
       bodyHolder.appendChild(mealNote);
 
       // Who's still missing, across the whole run (boarding is fluid between
@@ -1845,6 +1916,7 @@
       { id: "dashboard", label: "Dashboard", icon: "\u{1F4CA}" },
       { id: "map", label: "Fleet Map", icon: "\u{1F5FA}\uFE0F" },
       { id: "search", label: "Search", icon: "\u{1F50D}" },
+      { id: "passengers", label: "Passengers", icon: "\u{1F465}" },
       { id: "courtesy", label: "Courtesy Flow", icon: "\u{1F697}" },
       { id: "settings", label: "Settings", icon: "\u2699\uFE0F" },
     ];
@@ -1867,7 +1939,7 @@
       // Settings and Search are forms/lookups you're actively interacting with —
       // an automatic rebuild would wipe out anything mid-typing, so only the
       // live-glance views (Dashboard, Courtesy Flow, Fleet Map) refresh on their own.
-      if (state.coordTab === "settings" || state.coordTab === "search") return;
+      if (state.coordTab === "settings" || state.coordTab === "search" || state.coordTab === "passengers") return;
       lastReadFailed = false;
       await loadIndex();
       const runs = state.runIndex.length
@@ -1875,7 +1947,7 @@
         : [];
       const roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
       if (state.view !== "coord-home") return;
-      if (state.coordTab === "settings" || state.coordTab === "search") return;
+      if (state.coordTab === "settings" || state.coordTab === "search" || state.coordTab === "passengers") return;
       if (state.coordTab !== "map") destroyFleetMap();
       contentHolder.innerHTML = "";
       if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
@@ -1899,6 +1971,7 @@
       else if (state.coordTab === "search") contentHolder.appendChild(buildSearchTab(runs));
       else if (state.coordTab === "courtesy") contentHolder.appendChild(buildCourtesyContent(runs, await loadRoster()));
       else if (state.coordTab === "map") contentHolder.appendChild(buildFleetMapTab(runs, await loadRoster()));
+      else if (state.coordTab === "passengers") contentHolder.appendChild(buildPassengersTab(runs));
       else if (state.coordTab === "settings") contentHolder.appendChild(buildSettingsTab());
     }
 
@@ -2929,6 +3002,297 @@
     return wrap;
   }
 
+  // ---------- Passengers tab: bulk add / remove across many runs ----------
+  // Built because moving a family to a different flight meant editing every
+  // run they appeared on, one at a time. Here you pick the people once, pick
+  // the runs once, and apply in a single action.
+  function buildPassengersTab(runs) {
+    const wrap = document.createElement("div");
+
+    const modeBar = document.createElement("div");
+    modeBar.className = "tab-bar";
+    modeBar.style.marginBottom = "14px";
+    [
+      { id: "remove", label: "Remove from runs" },
+      { id: "add", label: "Add to runs" },
+    ].forEach(m => {
+      const b = document.createElement("button");
+      b.className = "tab-btn" + (state.paxToolMode === m.id ? " active" : "");
+      b.textContent = m.label;
+      b.onclick = () => {
+        state.paxToolMode = m.id;
+        state.paxSelectedNames = new Set();
+        state.paxSelectedRunIds = new Set();
+        state.paxToolQuery = "";
+        state.paxAddNames = "";
+        state.paxAddNeeds = "";
+        render();
+      };
+      modeBar.appendChild(b);
+    });
+    wrap.appendChild(modeBar);
+
+    // ============ REMOVE MODE ============
+    if (state.paxToolMode === "remove") {
+      const h = document.createElement("h2");
+      h.textContent = "Remove passengers";
+      wrap.appendChild(h);
+      const sub = document.createElement("p");
+      sub.className = "subtitle";
+      sub.textContent = "Search a name, tick everyone who's moving, then remove them from whichever runs you choose \u2014 all at once.";
+      wrap.appendChild(sub);
+
+      const search = document.createElement("input");
+      search.type = "search";
+      search.placeholder = "Search passenger names\u2026";
+      search.value = state.paxToolQuery;
+      search.style.cssText = "width:100%; margin-bottom:10px;";
+      wrap.appendChild(search);
+
+      // Build a name -> runs index so a person's whole footprint is visible
+      const byName = {};
+      runs.forEach(run => {
+        (run.manifest || []).forEach(p => {
+          const key = p.name.trim().toLowerCase();
+          if (!byName[key]) byName[key] = { name: p.name, entries: [] };
+          byName[key].entries.push({ run, person: p });
+        });
+      });
+
+      const q = state.paxToolQuery.trim().toLowerCase();
+      const matches = q
+        ? Object.values(byName).filter(v => v.name.toLowerCase().includes(q)).slice(0, 60)
+        : [];
+
+      const listHolder = document.createElement("div");
+      wrap.appendChild(listHolder);
+
+      if (!q) {
+        listHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">Start typing a name to find who to remove.</div>`;
+      } else if (!matches.length) {
+        listHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No passengers match \u201c${esc(state.paxToolQuery)}\u201d.</div>`;
+      } else {
+        matches.forEach(m => {
+          const checked = state.paxSelectedNames.has(m.name);
+          const card = document.createElement("div");
+          card.className = "card";
+          card.style.cssText = "padding:10px 12px; margin-bottom:8px;" + (checked ? " border-color:var(--brand); background:var(--brand-dim);" : "");
+          const boardedCount = m.entries.filter(e => e.person.boarded).length;
+          card.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+              <div class="checkbox" style="${checked ? "background:var(--brand); border-color:var(--brand); color:#fff;" : ""}">${checked ? "\u2713" : ""}</div>
+              <div style="flex:1;">
+                <div style="font-weight:600; font-size:14px;">${esc(m.name)}</div>
+                <div style="font-size:12px; color:var(--text-dim);">On ${m.entries.length} run${m.entries.length === 1 ? "" : "s"}${boardedCount ? " \u00b7 already boarded on " + boardedCount : ""}</div>
+              </div>
+            </div>
+            <div style="font-size:11.5px; color:var(--text-dim); margin-top:6px; padding-left:34px;">${m.entries.map(e => esc(e.run.runId)).join(" \u00b7 ")}</div>`;
+          card.onclick = () => {
+            if (checked) state.paxSelectedNames.delete(m.name);
+            else state.paxSelectedNames.add(m.name);
+            render();
+          };
+          listHolder.appendChild(card);
+        });
+      }
+
+      // Which runs to remove them from
+      if (state.paxSelectedNames.size) {
+        const affected = [];
+        runs.forEach(run => {
+          const hits = (run.manifest || []).filter(p => state.paxSelectedNames.has(p.name));
+          if (hits.length) affected.push({ run, hits });
+        });
+
+        const runHead = document.createElement("h3");
+        runHead.style.marginTop = "18px";
+        runHead.textContent = `Remove from which runs? (${affected.length} found)`;
+        wrap.appendChild(runHead);
+
+        const allBtn = document.createElement("button");
+        allBtn.className = "link-btn";
+        allBtn.style.marginBottom = "8px";
+        const allSelected = affected.length > 0 && affected.every(a => state.paxSelectedRunIds.has(a.run.runId));
+        allBtn.textContent = allSelected ? "Clear all runs" : "Select all runs";
+        allBtn.onclick = () => {
+          if (allSelected) state.paxSelectedRunIds = new Set();
+          else affected.forEach(a => state.paxSelectedRunIds.add(a.run.runId));
+          render();
+        };
+        wrap.appendChild(allBtn);
+
+        affected.forEach(({ run, hits }) => {
+          const sel = state.paxSelectedRunIds.has(run.runId);
+          const row = document.createElement("div");
+          row.className = "card";
+          row.style.cssText = "padding:10px 12px; margin-bottom:6px; cursor:pointer;" + (sel ? " border-color:var(--accent); background:var(--accent-dim);" : "");
+          const boardedHere = hits.filter(p => p.boarded).length;
+          row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+              <div class="checkbox" style="${sel ? "background:var(--accent); border-color:var(--accent); color:#fff;" : ""}">${sel ? "\u2713" : ""}</div>
+              <div style="flex:1;">
+                <div style="font-weight:600; font-size:13.5px;">${esc(run.runId)}</div>
+                <div style="font-size:12px; color:var(--text-dim);">${esc(run.description || "")}</div>
+                <div style="font-size:12px; color:var(--text-dim); margin-top:2px;">${hits.length} of the selected here${boardedHere ? " \u00b7 \u26a0\ufe0f " + boardedHere + " already boarded" : ""}</div>
+              </div>
+            </div>`;
+          row.onclick = () => {
+            if (sel) state.paxSelectedRunIds.delete(run.runId);
+            else state.paxSelectedRunIds.add(run.runId);
+            render();
+          };
+          wrap.appendChild(row);
+        });
+
+        if (state.paxSelectedRunIds.size) {
+          const total = affected
+            .filter(a => state.paxSelectedRunIds.has(a.run.runId))
+            .reduce((n, a) => n + a.hits.length, 0);
+          const doBtn = document.createElement("button");
+          doBtn.className = "btn btn-danger";
+          doBtn.style.marginTop = "14px";
+          doBtn.textContent = `Remove ${total} passenger entr${total === 1 ? "y" : "ies"} from ${state.paxSelectedRunIds.size} run${state.paxSelectedRunIds.size === 1 ? "" : "s"}`;
+          doBtn.onclick = async () => {
+            const names = Array.from(state.paxSelectedNames);
+            const runIds = Array.from(state.paxSelectedRunIds);
+            if (!confirm(`Remove ${names.length} passenger(s) from ${runIds.length} run(s)? This can't be undone.`)) return;
+            doBtn.disabled = true; doBtn.textContent = "Removing\u2026";
+            let removed = 0;
+            for (const rid of runIds) {
+              const updated = await mutateRun(rid, (fresh) => {
+                const before = fresh.manifest.length;
+                fresh.manifest = fresh.manifest.filter(p => !names.includes(p.name));
+                removed += before - fresh.manifest.length;
+              });
+              if (updated) await updateRunIndexEntry(rid, {});
+            }
+            state.paxSelectedNames = new Set();
+            state.paxSelectedRunIds = new Set();
+            showToast(`Removed ${removed} passenger entr${removed === 1 ? "y" : "ies"}`);
+            render();
+          };
+          wrap.appendChild(doBtn);
+        }
+      }
+
+      search.oninput = e => { state.paxToolQuery = e.target.value; render(); };
+      setTimeout(() => { if (state.paxToolQuery) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); } }, 0);
+      return wrap;
+    }
+
+    // ============ ADD MODE ============
+    const h = document.createElement("h2");
+    h.textContent = "Add passengers";
+    wrap.appendChild(h);
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Type the names once, tick every run they need to be on, then add them everywhere in one go.";
+    wrap.appendChild(sub);
+
+    const namesLabel = document.createElement("label");
+    namesLabel.textContent = "Names \u2014 one per line";
+    const namesArea = document.createElement("textarea");
+    namesArea.placeholder = "Jane Rider\nJohn Rider\nAlex Rider";
+    namesArea.style.minHeight = "90px";
+    namesArea.value = state.paxAddNames;
+    // Ticking a run re-renders the tab, so what's typed has to live in state
+    // or it would be wiped the moment a run is selected.
+    namesArea.oninput = e => { state.paxAddNames = e.target.value; };
+    wrap.appendChild(namesLabel); wrap.appendChild(namesArea);
+
+    const needsLabel = document.createElement("label");
+    needsLabel.textContent = "Special needs for all of these \u2014 optional";
+    needsLabel.style.marginTop = "10px";
+    const needsInput = document.createElement("select");
+    [["", "None \u2014 regular meal"],
+     ["Allergy box", "Allergy box \u2014 standard allergen meal"],
+     ["Extra special allergy box", "Extra special allergy box \u2014 named, that guest only"],
+     ["Mobility assistance", "Other need \u2014 mobility assistance (no meal)"],
+     ["Assistance required", "Other need \u2014 assistance required (no meal)"]]
+      .forEach(([v, lbl]) => {
+        const o = document.createElement("option"); o.value = v; o.textContent = lbl; needsInput.appendChild(o);
+      });
+    needsInput.value = state.paxAddNeeds;
+    needsInput.onchange = e => { state.paxAddNeeds = e.target.value; };
+    wrap.appendChild(needsLabel); wrap.appendChild(needsInput);
+
+    const runHead = document.createElement("h3");
+    runHead.style.marginTop = "18px";
+    runHead.textContent = "Add to which runs?";
+    wrap.appendChild(runHead);
+
+    const runSearch = document.createElement("input");
+    runSearch.type = "search";
+    runSearch.placeholder = "Filter runs by ID or description\u2026";
+    runSearch.value = state.paxToolQuery;
+    runSearch.style.cssText = "width:100%; margin-bottom:10px;";
+    wrap.appendChild(runSearch);
+
+    const rq = state.paxToolQuery.trim().toLowerCase();
+    const shownRuns = runs
+      .filter(r => !rq || r.runId.toLowerCase().includes(rq) || (r.description || "").toLowerCase().includes(rq))
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.runId.localeCompare(b.runId))
+      .slice(0, 80);
+
+    shownRuns.forEach(run => {
+      const sel = state.paxSelectedRunIds.has(run.runId);
+      const row = document.createElement("div");
+      row.className = "card";
+      row.style.cssText = "padding:10px 12px; margin-bottom:6px; cursor:pointer;" + (sel ? " border-color:var(--brand); background:var(--brand-dim);" : "");
+      row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+          <div class="checkbox" style="${sel ? "background:var(--brand); border-color:var(--brand); color:#fff;" : ""}">${sel ? "\u2713" : ""}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600; font-size:13.5px;">${esc(run.runId)}</div>
+            <div style="font-size:12px; color:var(--text-dim);">${esc(run.description || "")}${run.date ? " \u00b7 " + esc(formatDateLabel(run.date)) : ""}</div>
+          </div>
+          <div style="font-size:12px; color:var(--text-dim);">${(run.manifest || []).length} pax</div>
+        </div>`;
+      row.onclick = () => {
+        if (sel) state.paxSelectedRunIds.delete(run.runId);
+        else state.paxSelectedRunIds.add(run.runId);
+        render();
+      };
+      wrap.appendChild(row);
+    });
+
+    if (state.paxSelectedRunIds.size) {
+      const doBtn = document.createElement("button");
+      doBtn.className = "btn btn-primary";
+      doBtn.style.marginTop = "14px";
+      doBtn.textContent = `Add to ${state.paxSelectedRunIds.size} run${state.paxSelectedRunIds.size === 1 ? "" : "s"}`;
+      doBtn.onclick = async () => {
+        const names = state.paxAddNames.split("\n").map(n => n.trim()).filter(Boolean);
+        if (!names.length) { showToast("Enter at least one name"); return; }
+        const needs = state.paxAddNeeds;
+        const runIds = Array.from(state.paxSelectedRunIds);
+        doBtn.disabled = true; doBtn.textContent = "Adding\u2026";
+        let added = 0, skippedDupes = 0;
+        for (const rid of runIds) {
+          const updated = await mutateRun(rid, (fresh) => {
+            names.forEach((nm, i) => {
+              // Don't create a duplicate if they're already on this run
+              if (fresh.manifest.some(p => p.name.toLowerCase() === nm.toLowerCase())) { skippedDupes++; return; }
+              fresh.manifest.push({
+                id: rid + "-add-" + Date.now() + "-" + i,
+                name: nm, boarded: false, busNum: null, boardedAt: null,
+                specialNeeds: !!needs, specialNeedsNote: needs, phone: "",
+              });
+              added++;
+            });
+          });
+          if (updated) await updateRunIndexEntry(rid, {});
+        }
+        state.paxAddNames = "";
+        state.paxSelectedRunIds = new Set();
+        showToast(`Added ${added} passenger entr${added === 1 ? "y" : "ies"}` + (skippedDupes ? ` \u00b7 ${skippedDupes} already there` : ""));
+        render();
+      };
+      wrap.appendChild(doBtn);
+    }
+
+    runSearch.oninput = e => { state.paxToolQuery = e.target.value; render(); };
+    setTimeout(() => { if (state.paxToolQuery) { runSearch.focus(); runSearch.setSelectionRange(runSearch.value.length, runSearch.value.length); } }, 0);
+    return wrap;
+  }
+
   // ---------- Settings tab: runs setup, guide roster, Google Sheet sync ----------
   function buildSettingsTab() {
     const wrap = document.createElement("div");
@@ -3386,11 +3750,24 @@
   function mealCategory(person) {
     const note = String((person && person.specialNeedsNote) || "").toLowerCase();
     if (!person || !person.specialNeeds) return "regular";
+    // "extra special" = a named box for that guest only.
     if (note.includes("extra special")) return "extra";
-    return "allergy";
+    // Anything mentioning an allergy/dietary need takes a standard allergen box.
+    if (note.includes("allerg") || note.includes("diet") || note.includes("gluten") ||
+        note.includes("vegan") || note.includes("vegetarian") || note.includes("celiac") ||
+        note.includes("coeliac") || note.includes("nut") || note.includes("dairy") ||
+        note.includes("lactose") || note.includes("halal") || note.includes("kosher") ||
+        note.includes("meal") || note.includes("food")) return "allergy";
+    // Everything else is a real need but NOT a meal — mobility, assistance,
+    // travelling with an infant. Counting these as allergy boxes would both
+    // over-order meals and bury the actual need.
+    return "other";
   }
   function mealLabel(cat) {
-    return cat === "extra" ? "Extra special" : cat === "allergy" ? "Allergy" : "Regular";
+    return cat === "extra" ? "Extra special" : cat === "allergy" ? "Allergy" : cat === "other" ? "Other need" : "Regular";
+  }
+  function mealColor(cat) {
+    return cat === "extra" ? "var(--brand)" : cat === "allergy" ? "var(--accent)" : cat === "other" ? "var(--status-amber)" : "var(--text-dim)";
   }
   // Guide arrives 45 min before the flight; the bus/staging arrival is 30 min
   // before. Both are shown so the 15-minute head start is unmistakable.
@@ -3896,6 +4273,11 @@
     refreshBtn.onclick = async () => { state.currentRun = await loadRun(run.runId); updateLiveParts(); };
     screen.appendChild(refreshBtn);
 
+    const editRunBtn = document.createElement("button");
+    editRunBtn.className = "btn btn-secondary"; editRunBtn.style.marginBottom = "10px"; editRunBtn.textContent = "\u270F\uFE0F Edit Run Details";
+    editRunBtn.onclick = () => go("coord-edit-run");
+    screen.appendChild(editRunBtn);
+
     const editManifestBtn = document.createElement("button");
     editManifestBtn.className = "btn btn-secondary"; editManifestBtn.style.marginBottom = "10px"; editManifestBtn.textContent = "\u270F\uFE0F Edit Manifest";
     editManifestBtn.onclick = () => go("coord-manifest-edit");
@@ -4061,6 +4443,44 @@
         <div class="stat-box"><div class="num">${boarded}</div><div class="lbl">Boarded</div></div>
         <div class="stat-box"><div class="num">${total - boarded}</div><div class="lbl">Not boarded</div></div>`;
       statsHolder.appendChild(strip);
+      // Category totals, so the meal counts you're about to rely on are
+      // visible right where you're editing them.
+      const cc = { regular: 0, allergy: 0, extra: 0, other: 0 };
+      state.currentRun.manifest.forEach(p => cc[mealCategory(p)]++);
+      const strip2 = document.createElement("div");
+      strip2.className = "stat-strip";
+      strip2.style.marginTop = "8px";
+      strip2.innerHTML = `<div class="stat-box"><div class="num">${cc.regular}</div><div class="lbl">Regular</div></div>
+        <div class="stat-box"><div class="num" style="${cc.allergy ? "color:var(--accent);" : ""}">${cc.allergy}</div><div class="lbl">Allergy box</div></div>
+        <div class="stat-box"><div class="num" style="${cc.extra ? "color:var(--brand);" : ""}">${cc.extra}</div><div class="lbl">Extra special</div></div>
+        <div class="stat-box"><div class="num" style="${cc.other ? "color:var(--status-amber);" : ""}">${cc.other}</div><div class="lbl">Other need</div></div>`;
+      statsHolder.appendChild(strip2);
+      const mealNote = document.createElement("p");
+      mealNote.className = "subtitle";
+      mealNote.style.cssText = "font-size:12px; margin-top:6px;";
+      mealNote.textContent = "Meals to order = Allergy box + Extra special. \u201cOther need\u201d is not a meal and is excluded from those counts.";
+      statsHolder.appendChild(mealNote);
+
+      // Quick filter \u2014 reviewing 139 names to find the flagged handful is
+      // the slow part, so jump straight to the ones that matter.
+      const filterRow = document.createElement("div");
+      filterRow.style.cssText = "display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;";
+      [
+        ["all", "All"],
+        ["flagged", "Flagged only"],
+        ["allergy", "Allergy"],
+        ["extra", "Extra special"],
+        ["other", "Other need"],
+      ].forEach(([f, lbl]) => {
+        const b = document.createElement("button");
+        const on = (state.manifestCatFilter || "all") === f;
+        b.style.cssText = "flex:1 1 auto; min-width:66px; padding:6px 5px; font-size:11.5px; font-weight:700; border-radius:7px; cursor:pointer; border:1px solid " +
+          (on ? "var(--brand)" : "var(--border)") + ";" + (on ? " background:var(--brand); color:#fff;" : " background:var(--panel-alt); color:var(--text);");
+        b.textContent = lbl;
+        b.onclick = () => { state.manifestCatFilter = f; updateStats(); renderList(); };
+        filterRow.appendChild(b);
+      });
+      statsHolder.appendChild(filterRow);
     }
 
     async function removePerson(personId, personName, isBoarded, busNum) {
@@ -4079,29 +4499,38 @@
       renderList();
     }
 
-    async function toggleSpecialNeeds(personId, currentlyFlagged, currentNote) {
-      let note = "";
-      if (!currentlyFlagged) {
-        note = prompt("What's the note for this person? (e.g. \"Wheelchair access\", \"Vegetarian meal\")", "") || "";
-        if (!note.trim()) { showToast("No note entered \u2014 not flagged"); return; }
-      } else {
-        const ok = confirm("Remove the special needs flag for this person?");
-        if (!ok) return;
-      }
+    // Set a passenger's category directly rather than guessing from free text.
+    // "other" is a real need that must NOT be counted as a meal.
+    async function setPersonCategory(personId, cat, customNote) {
+      const preset = {
+        regular: { flag: false, note: "" },
+        allergy: { flag: true, note: "Allergy box" },
+        extra:   { flag: true, note: "Extra special allergy box" },
+        other:   { flag: true, note: customNote || "Assistance required" },
+      }[cat];
+      if (!preset) return;
       const updated = await mutateRun(run.runId, (fresh) => {
         const person = fresh.manifest.find(p => p.id === personId);
         if (!person) return;
-        person.specialNeeds = !currentlyFlagged;
-        person.specialNeedsNote = currentlyFlagged ? "" : note.trim();
+        person.specialNeeds = preset.flag;
+        person.specialNeedsNote = preset.note;
       });
       if (updated) state.currentRun = updated;
+      updateStats();
       renderList();
     }
 
     function renderList() {
       const q = searchInput.value.trim().toLowerCase();
+      const f = state.manifestCatFilter || "all";
       const list = state.currentRun.manifest
         .filter(p => !q || p.name.toLowerCase().includes(q))
+        .filter(p => {
+          if (f === "all") return true;
+          const cat = mealCategory(p);
+          if (f === "flagged") return cat !== "regular";
+          return cat === f;
+        })
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name));
       listHolder.innerHTML = "";
@@ -4121,17 +4550,42 @@
         row.appendChild(topRow);
 
         if (p.specialNeeds && p.specialNeedsNote) {
+          const cat0 = mealCategory(p);
           const note = document.createElement("div");
-          note.style.cssText = "margin-top:8px; font-size:12.5px; color:var(--accent); background:var(--accent-dim); padding:6px 10px; border-radius:6px;";
-          note.textContent = "\u2b50 " + p.specialNeedsNote;
+          note.style.cssText = "margin-top:8px; font-size:12.5px; padding:6px 10px; border-radius:6px; color:" + mealColor(cat0) +
+            "; background:" + (cat0 === "extra" ? "var(--brand-dim)" : cat0 === "other" ? "var(--status-amber-dim)" : "var(--accent-dim)") + ";";
+          note.textContent = (cat0 === "other" ? "\u267f " : "\u2b50 ") + p.specialNeedsNote + "  \u00b7  " + mealLabel(cat0);
           row.appendChild(note);
         }
-        const snBtn = document.createElement("button");
-        snBtn.className = "link-btn";
-        snBtn.style.cssText = "margin-top:8px; font-size:12px; display:block;";
-        snBtn.textContent = p.specialNeeds ? "Remove special needs flag" : "\u2b50 Mark special needs";
-        snBtn.onclick = () => toggleSpecialNeeds(p.id, !!p.specialNeeds, p.specialNeedsNote);
-        row.appendChild(snBtn);
+        // Four explicit buttons \u2014 no typing, no guessing which words the
+        // parser will pick up. Whatever is chosen here wins.
+        const curCat = mealCategory(p);
+        const catRow = document.createElement("div");
+        catRow.style.cssText = "display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;";
+        [
+          ["regular", "Regular"],
+          ["allergy", "Allergy box"],
+          ["extra", "Extra special"],
+          ["other", "Other need"],
+        ].forEach(([cat, label]) => {
+          const b = document.createElement("button");
+          const on = curCat === cat;
+          b.style.cssText = "flex:1 1 auto; min-width:78px; padding:7px 6px; font-size:11.5px; font-weight:700; border-radius:7px; cursor:pointer; border:1px solid " +
+            (on ? mealColor(cat) : "var(--border)") + ";" +
+            (on ? " background:" + mealColor(cat) + "; color:#fff;" : " background:var(--panel-alt); color:var(--text);");
+          b.textContent = label;
+          b.onclick = () => {
+            if (cat === "other") {
+              const note = prompt("What's the need? (not a meal \u2014 e.g. Wheelchair access, Limited mobility)", p.specialNeedsNote && curCat === "other" ? p.specialNeedsNote : "Assistance required");
+              if (note === null) return;
+              setPersonCategory(p.id, "other", note.trim() || "Assistance required");
+            } else {
+              setPersonCategory(p.id, cat);
+            }
+          };
+          catRow.appendChild(b);
+        });
+        row.appendChild(catRow);
 
         listHolder.appendChild(row);
       });
@@ -4144,8 +4598,342 @@
     }
     searchInput.oninput = renderList;
 
+    // ---- Replace this run's manifest from a spreadsheet ----
+    // For when a whole coach's passenger list changes: wipe just this run's
+    // names and load a fresh list, without touching any other run.
+    const replaceHead = document.createElement("h3");
+    replaceHead.textContent = "Replace this run's manifest";
+    replaceHead.style.marginTop = "18px";
+    screen.appendChild(replaceHead);
+
+    const replaceNote = document.createElement("p");
+    replaceNote.className = "subtitle";
+    replaceNote.style.cssText = "font-size:12.5px; margin-top:-6px;";
+    replaceNote.textContent = "Clears every name on THIS run only, then loads the new list. Other runs are untouched. Use the same Manifest columns as the main import \u2014 rows for other Run IDs in the file are ignored.";
+    screen.appendChild(replaceNote);
+
+    const replaceFileInput = document.createElement("input");
+    replaceFileInput.type = "file";
+    replaceFileInput.accept = ".xlsx,.xls,.csv";
+    replaceFileInput.style.display = "none";
+    screen.appendChild(replaceFileInput);
+
+    const replaceBtn = document.createElement("button");
+    replaceBtn.className = "btn btn-secondary";
+    replaceBtn.style.marginBottom = "8px";
+    replaceBtn.textContent = "\u{1F4E5} Clear & upload new manifest for this run";
+    replaceBtn.onclick = () => replaceFileInput.click();
+    screen.appendChild(replaceBtn);
+
+    replaceFileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      const boardedNow = totalBoarded(state.currentRun);
+      const warn = boardedNow
+        ? `This clears all ${state.currentRun.manifest.length} names on ${run.runId}, including ${boardedNow} already boarded, and replaces them with the file's list. Continue?`
+        : `This clears all ${state.currentRun.manifest.length} names on ${run.runId} and replaces them with the file's list. Continue?`;
+      if (!confirm(warn)) return;
+
+      replaceBtn.disabled = true; replaceBtn.textContent = "Reading file\u2026";
+      try {
+        const buf = await file.arrayBuffer();
+        const workbook = XLSX.read(buf, { type: "array", cellDates: true });
+        const mSheet = workbook.Sheets["Manifest"] || workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(mSheet, { defval: "" });
+        const people = [];
+        rows.forEach(row => {
+          const rid = String(row["Run ID"] || "").trim();
+          const name = String(row["Passenger Name"] || row["Name"] || "").trim();
+          if (!name) return;
+          // If the file names Run IDs, take only this run's rows. If it has
+          // no Run ID column at all, treat every row as belonging here.
+          if (rid && rid.toLowerCase() !== run.runId.toLowerCase()) return;
+          people.push({
+            name,
+            specialNeeds: String(row["Special Needs"] || "").trim(),
+            phone: String(row["Mobile"] || row["Mobile Number"] || row["Phone"] ||
+                          row["Phone Number"] || row["Guest Mobile"] || "").trim(),
+          });
+        });
+
+        if (!people.length) {
+          showToast("No passengers found for " + run.runId + " in that file");
+          replaceBtn.disabled = false; replaceBtn.textContent = "\u{1F4E5} Clear & upload new manifest for this run";
+          return;
+        }
+
+        const updated = await mutateRun(run.runId, (fresh) => {
+          fresh.manifest = people.map((p, i) => ({
+            id: run.runId + "-rep-" + Date.now() + "-" + i,
+            name: p.name, boarded: false, busNum: null, boardedAt: null,
+            specialNeeds: !!p.specialNeeds, specialNeedsNote: p.specialNeeds || "",
+            phone: p.phone || "",
+          }));
+        });
+        if (updated) {
+          state.currentRun = updated;
+          await updateRunIndexEntry(run.runId, {});
+          showToast(`Manifest replaced \u2014 ${people.length} passenger(s) loaded`);
+          updateStats();
+          renderList();
+        }
+      } catch (err) {
+        console.error(err);
+        showToast("Couldn't read that file \u2014 check it matches the Manifest template");
+      }
+      replaceBtn.disabled = false; replaceBtn.textContent = "\u{1F4E5} Clear & upload new manifest for this run";
+    };
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "btn btn-danger";
+    clearBtn.style.marginBottom = "18px";
+    clearBtn.textContent = "\u{1F5D1}\uFE0F Clear all names on this run";
+    clearBtn.onclick = async () => {
+      const n = state.currentRun.manifest.length;
+      if (!n) { showToast("Manifest is already empty"); return; }
+      const boardedNow = totalBoarded(state.currentRun);
+      if (!confirm(`Remove all ${n} name(s) from ${run.runId}${boardedNow ? `, including ${boardedNow} already boarded` : ""}? This can't be undone.`)) return;
+      const updated = await mutateRun(run.runId, (fresh) => { fresh.manifest = []; });
+      if (updated) {
+        state.currentRun = updated;
+        await updateRunIndexEntry(run.runId, {});
+        showToast(`Cleared ${n} name(s) from ${run.runId}`);
+        updateStats();
+        renderList();
+      }
+    };
+    screen.appendChild(clearBtn);
+
+
     updateStats();
     renderList();
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Coordinator: edit a run's details ----------
+  // Everything about a run except its ID and manifest. Changing the coach
+  // count is the delicate part: shrinking a run can strand passengers who
+  // are already boarded on a coach that's about to disappear, so that case
+  // is spelled out and handled rather than silently dropping them.
+  function renderCoordEditRun() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Edit run", () => go("coord-run-detail")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Edit run details</h2>`;
+
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.textContent = "Safe to edit mid-event. Guides see changes the next time their app refreshes. Boarding and live bus status are never reset by saving here.";
+    screen.appendChild(banner);
+
+    function field(labelText, el, hint) {
+      const l = document.createElement("label"); l.textContent = labelText;
+      screen.appendChild(l); screen.appendChild(el);
+      if (hint) {
+        const h = document.createElement("p");
+        h.className = "subtitle"; h.style.cssText = "margin-top:-8px; font-size:12px;";
+        h.textContent = hint;
+        screen.appendChild(h);
+      }
+      return el;
+    }
+    function textInput(val, ph) {
+      const i = document.createElement("input"); i.type = "text"; i.value = val || ""; if (ph) i.placeholder = ph; return i;
+    }
+    function timeInput(val) {
+      const i = document.createElement("input"); i.type = "time"; i.value = val || ""; return i;
+    }
+    function selectFrom(list, val) {
+      const sel = document.createElement("select");
+      const blank = document.createElement("option"); blank.value = ""; blank.textContent = "\u2014 none \u2014"; sel.appendChild(blank);
+      list.forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o); });
+      sel.value = val || "";
+      return sel;
+    }
+
+    const descInput = field("Description", textInput(run.description, "e.g. Charter - YYZ"));
+    const dateInput = field("Date", (() => { const i = document.createElement("input"); i.type = "date"; i.value = run.date || ""; return i; })());
+    const originInput = field("Origin", selectFrom(ORIGINS, run.origin));
+    const destInput = field("Destination", selectFrom(DESTINATIONS, run.destination));
+    const flightInput = field("Flight time", timeInput(run.flightTime), "Guide arrival is calculated as this minus 45 minutes.");
+    const departInput = field("Departure time", timeInput(run.departureTime), "When the coach leaves the hall.");
+    const prioInput = field("Departure priority", (() => {
+      const i = document.createElement("input"); i.type = "number"; i.min = "1"; i.max = "99";
+      i.value = run.departurePriority || ""; return i;
+    })(), "1 = leaves first. Blank for runs that aren't hall departures.");
+    const arriveInput = field("Planned arrival time", timeInput(run.plannedArrival));
+    const stageInput = field("Staging location", textInput(run.stagingLocation, "e.g. EWR Terminal A - Bus Bay 2"));
+    const companyInput = field("Bus company", selectFrom(BUS_COMPANIES, run.busCompany));
+
+    const cateringRow = document.createElement("div");
+    cateringRow.className = "checkbox-row";
+    const cateringCheck = document.createElement("input");
+    cateringCheck.type = "checkbox"; cateringCheck.id = "edit-catering-check"; cateringCheck.checked = !!run.catering;
+    const cateringLbl = document.createElement("label");
+    cateringLbl.className = "cr-label"; cateringLbl.setAttribute("for", "edit-catering-check");
+    cateringLbl.textContent = "Catering on this run";
+    cateringRow.appendChild(cateringCheck); cateringRow.appendChild(cateringLbl);
+    screen.appendChild(cateringRow);
+
+    // ---- coach count ----
+    const busHead = document.createElement("h3");
+    busHead.textContent = "Coaches and guides";
+    busHead.style.marginTop = "18px";
+    screen.appendChild(busHead);
+
+    const busInput = document.createElement("input");
+    busInput.type = "number"; busInput.min = "1"; busInput.max = String(MAX_BUSES);
+    busInput.value = run.numBuses;
+    field("Number of coaches", busInput, `1\u2013${MAX_BUSES}. Adding coaches leaves existing ones untouched.`);
+
+    const warnBox = document.createElement("div");
+    warnBox.style.cssText = "display:none; margin-top:-6px; margin-bottom:12px;";
+    screen.appendChild(warnBox);
+
+    function checkShrink() {
+      const n = Math.max(1, Math.min(MAX_BUSES, parseInt(busInput.value, 10) || 1));
+      warnBox.style.display = "none";
+      warnBox.innerHTML = "";
+      if (n >= run.numBuses) return;
+      const losing = run.buses.filter(b => b.num > n);
+      const strandedPax = run.manifest.filter(p => p.boarded && p.busNum > n);
+      const losingGuides = losing.map(b => b.guideName).filter(Boolean);
+      const bits = [];
+      bits.push(`Removing coach${losing.length === 1 ? "" : "es"} ${losing.map(b => b.num).join(", ")}.`);
+      if (losingGuides.length) bits.push(`${losingGuides.join(", ")} will be unassigned.`);
+      if (strandedPax.length) bits.push(`\u26a0\ufe0f ${strandedPax.length} already-boarded passenger${strandedPax.length === 1 ? "" : "s"} will be set back to not boarded.`);
+      warnBox.style.display = "block";
+      warnBox.innerHTML = `<div class="banner" style="border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);">${esc(bits.join(" "))}</div>`;
+    }
+    busInput.oninput = checkShrink;
+    checkShrink();
+
+    // ---- per-coach guide assignment ----
+    const guideNote = document.createElement("p");
+    guideNote.className = "subtitle";
+    guideNote.style.cssText = "font-size:12.5px; margin-bottom:6px;";
+    guideNote.textContent = "Assign a guide to each coach. Reassigning never changes that coach's live status or who's already boarded.";
+    screen.appendChild(guideNote);
+
+    const guideHolder = document.createElement("div");
+    screen.appendChild(guideHolder);
+    const guideSelects = [];
+
+    (async () => {
+      const roster = await loadRoster();
+      function renderGuideRows() {
+        guideHolder.innerHTML = "";
+        guideSelects.length = 0;
+        const n = Math.max(1, Math.min(MAX_BUSES, parseInt(busInput.value, 10) || 1));
+        for (let i = 0; i < n; i++) {
+          const existing = run.buses.find(b => b.num === i + 1);
+          const rowWrap = document.createElement("div");
+          rowWrap.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:8px;";
+          const lbl = document.createElement("div");
+          lbl.style.cssText = "font-family:var(--mono); font-weight:700; font-size:13px; min-width:34px;";
+          lbl.textContent = "B" + (i + 1);
+          const sel = document.createElement("select");
+          sel.style.flex = "1";
+          const blank = document.createElement("option"); blank.value = ""; blank.textContent = "\u2014 no guide \u2014"; sel.appendChild(blank);
+          roster.forEach(g => {
+            const o = document.createElement("option"); o.value = g.name; o.textContent = g.name; sel.appendChild(o);
+          });
+          sel.value = existing ? (existing.guideName || "") : "";
+          sel.dataset.busNum = String(i + 1);
+          guideSelects.push(sel);
+          rowWrap.appendChild(lbl); rowWrap.appendChild(sel);
+          if (existing) {
+            const st = document.createElement("span");
+            st.className = "status-pill " + STATUS_CLASS(existing.status);
+            st.style.cssText = "font-size:10px; white-space:nowrap;";
+            st.innerHTML = `<span class="sdot"></span>${existing.status}`;
+            rowWrap.appendChild(st);
+          } else {
+            const st = document.createElement("span");
+            st.style.cssText = "font-size:11px; color:var(--green); white-space:nowrap; font-weight:700;";
+            st.textContent = "NEW";
+            rowWrap.appendChild(st);
+          }
+          guideHolder.appendChild(rowWrap);
+        }
+      }
+      renderGuideRows();
+      busInput.addEventListener("input", renderGuideRows);
+    })();
+
+    // ---- save ----
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "btn btn-primary";
+    saveBtn.style.marginTop = "18px";
+    saveBtn.textContent = "Save changes";
+    saveBtn.onclick = async () => {
+      const n = Math.max(1, Math.min(MAX_BUSES, parseInt(busInput.value, 10) || 1));
+      if (n < run.numBuses) {
+        const stranded = run.manifest.filter(p => p.boarded && p.busNum > n).length;
+        const msg = stranded
+          ? `This removes ${run.numBuses - n} coach(es) and will set ${stranded} already-boarded passenger(s) back to not boarded. Continue?`
+          : `This removes ${run.numBuses - n} coach(es). Continue?`;
+        if (!confirm(msg)) return;
+      }
+      const guideByBus = {};
+      guideSelects.forEach(sel => { guideByBus[parseInt(sel.dataset.busNum, 10)] = sel.value; });
+
+      const patch = {
+        description: descInput.value.trim(),
+        date: dateInput.value,
+        origin: originInput.value,
+        destination: destInput.value,
+        flightTime: flightInput.value || null,
+        departureTime: departInput.value || null,
+        departurePriority: (() => { const v = parseInt(prioInput.value, 10); return Number.isFinite(v) ? v : null; })(),
+        plannedArrival: arriveInput.value || null,
+        stagingLocation: stageInput.value.trim(),
+        busCompany: companyInput.value,
+        catering: cateringCheck.checked,
+      };
+
+      saveBtn.disabled = true; saveBtn.textContent = "Saving\u2026";
+      const updated = await mutateRun(run.runId, (fresh) => {
+        Object.assign(fresh, patch);
+        // Grow: append fresh coaches. Shrink: drop the tail and un-board
+        // anyone who was on a coach that no longer exists.
+        if (n > fresh.buses.length) {
+          for (let i = fresh.buses.length; i < n; i++) {
+            fresh.buses.push({
+              num: i + 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null, completedAt: null,
+              eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false, cateringLoadedAt: null,
+              guideArrived: false, guideArrivedAt: null, busArrived: false, busArrivedAt: null,
+              teamInPlace: false, teamInPlaceAt: null, checklistBypassed: false,
+            });
+          }
+        } else if (n < fresh.buses.length) {
+          fresh.buses = fresh.buses.filter(b => b.num <= n);
+          fresh.manifest.forEach(p => {
+            if (p.boarded && p.busNum > n) { p.boarded = false; p.busNum = null; p.boardedAt = null; }
+          });
+        }
+        fresh.numBuses = n;
+        // Guide assignment only \u2014 never touch status, ETA or boarding.
+        fresh.buses.forEach(b => {
+          if (Object.prototype.hasOwnProperty.call(guideByBus, b.num)) b.guideName = guideByBus[b.num] || "";
+        });
+      });
+      if (!updated) { saveBtn.disabled = false; saveBtn.textContent = "Save changes"; return; }
+      await updateRunIndexEntry(run.runId, {
+        description: updated.description,
+        numBuses: updated.numBuses,
+        assignedGuides: computeAssignedGuides(updated.buses, updated.extraGuides),
+      });
+      state.currentRun = updated;
+      showToast("Run updated");
+      go("coord-run-detail");
+    };
+    screen.appendChild(saveBtn);
+
     c.appendChild(screen);
     return c;
   }
