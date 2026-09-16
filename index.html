@@ -2077,7 +2077,7 @@
   }
 
   // ---------- Dashboard tab: global stats + run list ----------
-  function buildDashboardTab(runs) {
+  function buildDashboardTab(runs, statsOnly) {
     const wrap = document.createElement("div");
 
     if (!runs.length) {
@@ -2139,6 +2139,10 @@
       <div class="bus-detail-count"><b>${grandBuses} buses \u00b7 ${grandPax} pax</b></div>`;
     breakdownCard.appendChild(totalRow);
     wrap.appendChild(breakdownCard);
+
+    // Courtesy Flow wants the numbers only \u2014 it already has its own
+    // arrival/departure views for drilling into individual runs.
+    if (statsOnly) return wrap;
 
     const listHeading = document.createElement("h3");
     listHeading.textContent = "All runs";
@@ -2426,10 +2430,10 @@
     const modeBar = document.createElement("div");
     modeBar.className = "tab-bar"; modeBar.style.marginBottom = "16px";
     [
-      { id: "dashboard", label: "Dashboard" },
       { id: "arrival", label: "Arrival to Hall" },
       { id: "departure", label: "Departure from Hall" },
       { id: "search", label: "Search" },
+      { id: "dashboard", label: "Dashboard" },
     ].forEach(m => {
       const btn = document.createElement("button");
       btn.className = "tab-btn" + (state.courtesyMode === m.id ? " active" : "");
@@ -2442,7 +2446,7 @@
     // Same live stats the coordinator sees \u2014 the courtesy team is asked
     // "how's it going overall?" as often as anyone.
     if (state.courtesyMode === "dashboard") {
-      wrap.appendChild(buildDashboardTab(runs));
+      wrap.appendChild(buildDashboardTab(runs, true));
       return wrap;
     }
 
