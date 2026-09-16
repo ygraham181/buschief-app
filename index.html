@@ -267,6 +267,8 @@
     manifestCatFilter: "all",
     guideAddNames: "",
     coordRunQuery: "",
+    hdCompletedQuery: "",
+    hdOpenCompleted: null,
     exportScope: "boarded",
     exportGrouping: "bybus",
     exportBackView: "coord-run-detail",
@@ -2965,6 +2967,7 @@
     const tabs = [
       { id: "arrivals", label: "Arrivals", icon: "\u{1F697}" },
       { id: "search", label: "Search", icon: "\u{1F50D}" },
+      { id: "completed", label: "Completed", icon: "\u2705" },
     ];
     tabs.forEach(t => {
       const btn = document.createElement("button");
@@ -2990,11 +2993,221 @@
       if (state.view !== "helpdesk-home") return;
       contentHolder.innerHTML = "";
       if (state.helpdeskTab === "arrivals") contentHolder.appendChild(buildCourtesyContent(runs, roster));
+      else if (state.helpdeskTab === "completed") contentHolder.appendChild(buildHelpdeskCompletedTab(runs, roster));
       else contentHolder.appendChild(buildHelpdeskSearchTab(runs, roster));
     }
     refresh();
     startPolling(refresh, 60000);
     return c;
+  }
+
+  // ---------- Help Desk: completed runs, with a read-only record ----------
+  // After the event (or later in the day) the desk gets asked "who was on
+  // that bus?". This keeps a static, per-bus record of every finished run.
+  function buildHelpdeskCompletedTab(runs, roster) {
+    const wrap = document.createElement("div");
+
+    const completed = runs.filter(r => aggregateStatus(r) === "Completed");
+
+    const h = document.createElement("h2");
+    h.textContent = "Completed runs";
+    wrap.appendChild(h);
+
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Finished runs with a record of who travelled on each bus. View only \u2014 nothing here can be changed.";
+    wrap.appendChild(sub);
+
+    if (!completed.length) {
+      wrap.innerHTML += `<div class="empty-state" style="padding:26px 0;"><div class="big">\u{1F68C}</div>No runs have been completed yet.<br/>They'll appear here once every bus on a run is marked completed.</div>`;
+      return wrap;
+    }
+
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "Search completed runs or passenger names\u2026";
+    search.value = state.hdCompletedQuery || "";
+    search.style.cssText = "width:100%; margin-bottom:10px;";
+    wrap.appendChild(search);
+
+    const countLine = document.createElement("p");
+    countLine.className = "subtitle";
+    countLine.style.cssText = "font-size:12px; margin:-4px 0 8px;";
+    wrap.appendChild(countLine);
+
+    const listHolder = document.createElement("div");
+    wrap.appendChild(listHolder);
+
+    function runSortKeyHd(runId) {
+      const id = String(runId || "");
+      const dm = id.match(/^C-(\d{4})/);
+      const sm = id.match(/C(\d+)\s*$/);
+      return { date: dm ? parseInt(dm[1], 10) : 99999, seq: sm ? parseInt(sm[1], 10) : 999999, raw: id };
+    }
+
+    function renderList() {
+      listHolder.innerHTML = "";
+      const q = String(state.hdCompletedQuery || "").trim().toLowerCase();
+      const shown = completed.filter(run => {
+        if (!q) return true;
+        if ([run.runId, run.description, run.origin, run.destination, run.busCompany]
+            .filter(Boolean).join(" ").toLowerCase().includes(q)) return true;
+        // also match on a passenger's name, so "which bus was X on?" works
+        return (run.manifest || []).some(p => p.name.toLowerCase().includes(q));
+      }).slice().sort((a, b) => {
+        const ka = runSortKeyHd(a.runId), kb = runSortKeyHd(b.runId);
+        if (ka.date !== kb.date) return ka.date - kb.date;
+        if (ka.seq !== kb.seq) return ka.seq - kb.seq;
+        return ka.raw.localeCompare(kb.raw);
+      });
+
+      countLine.textContent = q
+        ? `${shown.length} of ${completed.length} completed run(s) match`
+        : `${completed.length} completed run(s)`;
+
+      if (!shown.length) {
+        listHolder.innerHTML = `<div class="empty-state" style="padding:20px 0;">No completed runs match \u201c${esc(state.hdCompletedQuery)}\u201d.</div>`;
+        return;
+      }
+
+      shown.forEach(run => {
+        const isOpen = state.hdOpenCompleted === run.runId;
+        const boarded = (run.manifest || []).filter(p => p.boarded);
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const head = document.createElement("button");
+        head.className = "list-btn";
+        const lastDone = run.buses.map(b => b.completedAt).filter(Boolean).sort((a, b) => b - a)[0];
+        head.innerHTML = `<div class="run-row">
+            <div><div class="run-id">${esc(run.runId)}</div>
+              <div class="run-desc">${esc(run.description || "")}</div>
+              ${run.origin || run.destination ? `<div style="font-size:12px; color:var(--brand); font-weight:600; margin-top:2px;">${esc(run.origin || "")} \u2192 ${esc(run.destination || "")}</div>` : ""}
+            </div>
+            <div class="chev" style="transform:rotate(${isOpen ? "90deg" : "0deg"});">\u203A</div>
+          </div>
+          <div class="stat-strip" style="margin:12px 0 0;">
+            <div class="stat-box"><div class="num">${boarded.length}</div><div class="lbl">Travelled</div></div>
+            <div class="stat-box"><div class="num">${run.buses.length}</div><div class="lbl">Bus${run.buses.length === 1 ? "" : "es"}</div></div>
+            <div class="stat-box"><div class="num" style="font-size:14px;">${lastDone ? new Date(lastDone).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "\u2014"}</div><div class="lbl">Finished</div></div>
+          </div>`;
+        head.onclick = () => {
+          state.hdOpenCompleted = isOpen ? null : run.runId;
+          renderList();
+        };
+        card.appendChild(head);
+
+        if (isOpen) {
+          // run detail
+          const det = document.createElement("div");
+          det.style.cssText = "margin-top:12px; padding-top:10px; border-top:1px solid var(--border);";
+          const rows = [];
+          if (run.date) rows.push(["Date", formatDateLabel(run.date)]);
+          if (run.busCompany) rows.push(["Bus company", run.busCompany]);
+          if (run.stagingLocation) rows.push(["Staging", run.stagingLocation]);
+          if (run.flightTime) rows.push(["Flight time", formatPlannedTime(run.flightTime)]);
+          if (run.departureTime) rows.push(["Departed (planned)", formatPlannedTime(run.departureTime)]);
+          if (run.plannedArrival) rows.push(["Planned arrival", formatPlannedTime(run.plannedArrival)]);
+          const liveEtas = run.buses.map(b => b.eta).filter(Boolean).sort((a, b) => a - b);
+          if (liveEtas.length) rows.push(["Last live ETA", new Date(liveEtas[liveEtas.length - 1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })]);
+          if (run.catering) rows.push(["Catering", run.cateringDetails || "Yes"]);
+          det.innerHTML = rows.map(([k, v]) =>
+            `<div style="display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:13px;">
+               <span style="color:var(--text-dim);">${esc(k)}</span><span style="font-weight:600; text-align:right;">${esc(String(v))}</span>
+             </div>`).join("");
+          card.appendChild(det);
+
+          // meal summary for the run
+          const cc = { regular: 0, allergy: 0, extra: 0, other: 0 };
+          boarded.forEach(p => cc[mealCategory(p)]++);
+          const mealStrip = document.createElement("div");
+          mealStrip.className = "stat-strip";
+          mealStrip.style.marginTop = "10px";
+          mealStrip.innerHTML = `<div class="stat-box"><div class="num">${cc.regular}</div><div class="lbl">Regular</div></div>
+            <div class="stat-box"><div class="num" style="${cc.allergy ? "color:var(--accent);" : ""}">${cc.allergy}</div><div class="lbl">Allergen Meals</div></div>
+            <div class="stat-box"><div class="num" style="${cc.extra ? "color:var(--brand);" : ""}">${cc.extra}</div><div class="lbl">Special Dietary Care</div></div>
+            <div class="stat-box"><div class="num" style="${cc.other ? "color:var(--status-amber);" : ""}">${cc.other}</div><div class="lbl">Other need</div></div>`;
+          card.appendChild(mealStrip);
+
+          // per-bus manifests
+          run.buses.forEach(b => {
+            const onThis = boarded.filter(p => p.busNum === b.num)
+              .slice().sort((x, y) => x.name.localeCompare(y.name));
+            const busHead = document.createElement("div");
+            busHead.style.cssText = "margin-top:14px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px;";
+            busHead.innerHTML = `<span style="font-family:var(--mono); font-weight:700; font-size:13px;">Bus ${b.num}${b.guideName ? " \u00b7 " + esc(b.guideName) : ""}</span>
+              <span style="font-size:12px; color:var(--text-dim);">${onThis.length} passenger${onThis.length === 1 ? "" : "s"}</span>`;
+            card.appendChild(busHead);
+
+            const listBox = document.createElement("div");
+            listBox.style.cssText = "background:var(--panel-alt); border-radius:8px; padding:8px 10px;";
+            if (!onThis.length) {
+              listBox.innerHTML = `<div style="font-size:12.5px; color:var(--text-dim);">No one recorded on this bus.</div>`;
+            } else {
+              listBox.innerHTML = onThis.map(p => {
+                const cat = mealCategory(p);
+                return `<div style="display:flex; justify-content:space-between; gap:8px; padding:4px 0; font-size:13px; border-bottom:1px solid var(--border);">
+                    <span>${p.specialNeeds ? "\u2b50 " : ""}${esc(p.name)}</span>
+                    ${cat !== "regular" ? `<span style="font-size:11px; font-weight:700; white-space:nowrap; color:${mealColor(cat)};">${esc(mealLabel(cat))}</span>` : ""}
+                  </div>`;
+              }).join("");
+            }
+            card.appendChild(listBox);
+          });
+
+          // anyone recorded as travelling but not tied to a bus
+          const noBus = boarded.filter(p => !p.busNum);
+          if (noBus.length) {
+            const nh = document.createElement("div");
+            nh.style.cssText = "margin-top:14px; margin-bottom:6px; font-family:var(--mono); font-weight:700; font-size:13px; color:var(--status-amber);";
+            nh.textContent = `Not assigned to a bus (${noBus.length})`;
+            card.appendChild(nh);
+            const nb = document.createElement("div");
+            nb.style.cssText = "background:var(--status-amber-dim); border-radius:8px; padding:8px 10px;";
+            nb.innerHTML = noBus.slice().sort((x, y) => x.name.localeCompare(y.name))
+              .map(p => `<div style="padding:4px 0; font-size:13px;">${esc(p.name)}</div>`).join("");
+            card.appendChild(nb);
+          }
+
+          // did not travel
+          const notBoarded = (run.manifest || []).filter(p => !p.boarded);
+          if (notBoarded.length) {
+            const dh = document.createElement("div");
+            dh.style.cssText = "margin-top:14px; margin-bottom:6px; font-family:var(--mono); font-weight:700; font-size:13px; color:var(--text-dim);";
+            dh.textContent = `On the manifest but never boarded (${notBoarded.length})`;
+            card.appendChild(dh);
+            const db = document.createElement("div");
+            db.style.cssText = "background:var(--panel-alt); border-radius:8px; padding:8px 10px;";
+            db.innerHTML = notBoarded.slice().sort((x, y) => x.name.localeCompare(y.name))
+              .map(p => `<div style="padding:4px 0; font-size:13px; color:var(--text-dim);">${esc(p.name)}</div>`).join("");
+            card.appendChild(db);
+          }
+
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "btn btn-secondary";
+          copyBtn.style.marginTop = "12px";
+          copyBtn.textContent = "\u{1F4CB} Copy this run's list";
+          copyBtn.onclick = () => {
+            state.currentRun = run;
+            state.exportBackView = "helpdesk-home";
+            go("manifest-export");
+          };
+          card.appendChild(copyBtn);
+        }
+
+        listHolder.appendChild(card);
+      });
+    }
+
+    search.oninput = e => { state.hdCompletedQuery = e.target.value; renderList(); };
+    renderList();
+    setTimeout(() => {
+      if (state.hdCompletedQuery) {
+        search.focus();
+        search.setSelectionRange(search.value.length, search.value.length);
+      }
+    }, 0);
+    return wrap;
   }
 
   function buildHelpdeskSearchTab(runs, roster) {
