@@ -44,6 +44,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <div id="app-root"></div>
 <style>
   :root {
@@ -264,6 +265,10 @@
     paxAddNames: "",              // typed names survive re-renders
     paxAddNeeds: "",
     manifestCatFilter: "all",
+    guideAddNames: "",
+    exportScope: "boarded",
+    exportGrouping: "bybus",
+    exportBackView: "coord-run-detail",
     courtesyMode: "arrival",
     unboardedOnly: false,
     specialNeedsOnly: false,
@@ -504,7 +509,7 @@
     return Math.floor(s / 3600) + "h ago";
   }
 
-  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes", "coord-edit-run"]);
+  const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes", "coord-edit-run", "coord-compare-pdf", "manifest-export"]);
 
   function render() {
     // Any activity while on a coordinator screen keeps the 10-minute session alive.
@@ -535,7 +540,8 @@
       "helpdesk-pin": renderHelpdeskPin, "helpdesk-home": renderHelpdeskHome,
       "coord-sheet-settings": renderCoordSheetSettings,
       "coord-manifest-edit": renderCoordManifestEdit, "coord-edit-notes": renderCoordEditNotes,
-      "coord-edit-run": renderCoordEditRun,
+      "coord-edit-run": renderCoordEditRun, "coord-compare-pdf": renderCoordComparePdf,
+      "manifest-export": renderManifestExport,
     };
     wrap.appendChild(views[state.view]());
     root.appendChild(wrap);
@@ -1718,6 +1724,96 @@
       mealNote.textContent = "Meals for passengers boarded on this bus. Special Dietary Care Meals are named \u2014 hand each one to that guest only. \u201cOther need\u201d is a non-food need (mobility, assistance) \u2014 no meal required.";
       bodyHolder.appendChild(mealNote);
 
+      // ---- Add names to this bus ----
+      // Two situations need this. On "build" runs the coach loads freely and
+      // the guide types everyone in afterwards. On normal runs, extra people
+      // sometimes turn up and aren't turned away — they get added here too.
+      const isBuildMode = state.currentRun.manifestMode === "build";
+      // Build runs always need it. Pre-populated runs only when the run has
+      // walk-ups switched on \u2014 otherwise guides shouldn't be adding names.
+      const canAddNames = isBuildMode || !!state.currentRun.allowWalkUps;
+      const addWrap = document.createElement("div");
+      addWrap.style.cssText = "margin-bottom:14px;";
+      bodyHolder.appendChild(addWrap);
+
+      function renderAddBox() {
+        addWrap.innerHTML = "";
+        if (!canAddNames) return;
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.cssText = "padding:12px 13px;" + (isBuildMode ? " border-color:var(--brand); background:var(--brand-dim);" : "");
+
+        const h = document.createElement("div");
+        h.style.cssText = "font-weight:700; font-size:13.5px; margin-bottom:2px; color:" + (isBuildMode ? "var(--brand)" : "var(--text)") + ";";
+        h.textContent = isBuildMode ? "\u270D\uFE0F Build this bus's manifest" : "Add someone who isn't on the list";
+        card.appendChild(h);
+
+        const sub = document.createElement("div");
+        sub.style.cssText = "font-size:12px; color:var(--text-dim); margin-bottom:8px;";
+        sub.textContent = isBuildMode
+          ? "Type the names of everyone on board. One per line. They're recorded as boarded on this bus straight away."
+          : "For guests who turn up and aren't on the manifest. One name per line.";
+        card.appendChild(sub);
+
+        const ta = document.createElement("textarea");
+        ta.placeholder = "Jane Rider\nJohn Rider";
+        ta.style.cssText = "min-height:" + (isBuildMode ? "84px" : "60px") + "; width:100%;";
+        ta.value = state.guideAddNames || "";
+        ta.oninput = e => { state.guideAddNames = e.target.value; };
+        card.appendChild(ta);
+
+        const btn = document.createElement("button");
+        btn.className = "btn " + (isBuildMode ? "btn-primary" : "btn-secondary");
+        btn.style.marginTop = "8px";
+        btn.textContent = isBuildMode ? "Add to this bus" : "Add to manifest";
+        btn.onclick = async () => {
+          const names = String(state.guideAddNames || "").split("\n").map(n => n.trim()).filter(Boolean);
+          if (!names.length) { showToast("Enter at least one name"); return; }
+          btn.disabled = true; btn.textContent = "Adding\u2026";
+          let added = 0, dupes = 0;
+          const updated = await mutateRun(run.runId, (fresh) => {
+            added = 0; dupes = 0;
+            names.forEach((nm, i) => {
+              if (fresh.manifest.some(p => p.name.toLowerCase() === nm.toLowerCase())) { dupes++; return; }
+              fresh.manifest.push({
+                id: run.runId + "-gadd-" + Date.now() + "-" + i,
+                name: nm,
+                // Build mode means they're physically on this coach already,
+                // so record them as boarded rather than making the guide
+                // tick every name a second time.
+                boarded: isBuildMode,
+                busNum: isBuildMode ? busNum : null,
+                boardedAt: isBuildMode ? Date.now() : null,
+                specialNeeds: false, specialNeedsNote: "", phone: "",
+              });
+              added++;
+            });
+          });
+          if (updated) {
+            state.currentRun = updated;
+            state.guideAddNames = "";
+            showToast(`Added ${added}` + (dupes ? ` \u00b7 ${dupes} already listed` : ""));
+            refreshManifestLive();
+          } else {
+            btn.disabled = false;
+            btn.textContent = isBuildMode ? "Add to this bus" : "Add to manifest";
+          }
+        };
+        card.appendChild(btn);
+
+        // Straight to a copy-ready list — the venue team often wants it the
+        // moment the manifest is built.
+        const copyLink = document.createElement("button");
+        copyLink.className = "link-btn";
+        copyLink.style.cssText = "margin-top:10px; font-size:12.5px;";
+        copyLink.textContent = "\u{1F4CB} Copy this bus's list\u2026";
+        copyLink.onclick = () => { state.exportBackView = "guide-manifest"; go("manifest-export"); };
+        card.appendChild(copyLink);
+
+        addWrap.appendChild(card);
+      }
+      renderAddBox();
+
       // Who's still missing, across the whole run (boarding is fluid between
       // buses, so this is run-wide, not just this coach). Same component the
       // Courtesy Flow and Help Desk screens use, so tapping a name reveals
@@ -2330,6 +2426,7 @@
     const modeBar = document.createElement("div");
     modeBar.className = "tab-bar"; modeBar.style.marginBottom = "16px";
     [
+      { id: "dashboard", label: "Dashboard" },
       { id: "arrival", label: "Arrival to Hall" },
       { id: "departure", label: "Departure from Hall" },
       { id: "search", label: "Search" },
@@ -2341,6 +2438,13 @@
       modeBar.appendChild(btn);
     });
     wrap.appendChild(modeBar);
+
+    // Same live stats the coordinator sees \u2014 the courtesy team is asked
+    // "how's it going overall?" as often as anyone.
+    if (state.courtesyMode === "dashboard") {
+      wrap.appendChild(buildDashboardTab(runs));
+      return wrap;
+    }
 
     if (state.courtesyMode === "search") {
       wrap.appendChild(buildHelpdeskSearchTab(runs, roster));
@@ -3689,14 +3793,14 @@
 
   async function downloadImportTemplate() {
     const runsData = [
-      ["Run ID", "Description", "Date", "Origin", "Destination", "Flight Time", "Departure Time", "Departure Priority", "Planned Arrival Time", "Staging Location", "Number of Buses", "Bus Company",
+      ["Run ID", "Description", "Date", "Origin", "Destination", "Flight Time", "Departure Time", "Departure Priority", "Planned Arrival Time", "Manifest Mode", "Allow Walk-Ups", "Staging Location", "Number of Buses", "Bus Company",
        "Bus 1 Guide", "Bus 2 Guide", "Bus 3 Guide", "Bus 4 Guide", "Bus 5 Guide", "Bus 6 Guide",
        "Bus 7 Guide", "Bus 8 Guide", "Bus 9 Guide", "Bus 10 Guide", "Bus 11 Guide", "Bus 12 Guide",
        "Catering (Yes/No)", "Catering Details",
        "Procedure - Beginning of Run", "Announcement - Beginning of Run",
        "Procedure - During Run", "Announcement - During Run",
        "Procedure - Upon Arrival", "Announcement - Upon Arrival"],
-      ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "13:35", "14:05", 1, "15:07", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
+      ["RUN-001", "EWR arrivals to New York Hall", "2026-09-16", "EWR Terminal A", "New York Hall", "13:35", "14:05", 1, "15:07", "prepopulated", "No", "EWR Terminal A - Bus Bay 2", 2, "Academy Express",
        "Jane Doe", "Marcus Alvarez", "", "", "", "", "", "", "", "", "", "",
        "Yes", "2x breakfast boxes, bottled water",
        "Inspect and clean the bus. Confirm destination and seat count with the driver. Review the manifest.",
@@ -3840,6 +3944,17 @@
         date: parseDateCell(row["Date"]),
         origin: originMatch || originRaw, destination: destMatch || destRaw,
         plannedArrival: parseTimeCell(row["Planned Arrival Time"]) || null,
+        // "prepopulated" = tick names off a known list (the default).
+        // "build" = the coach loads freely and the guide types names in
+        // afterwards, which is how the Friday boat transfers run.
+        manifestMode: (function () {
+          const v = String(row["Manifest Mode"] || "").trim().toLowerCase();
+          return (v === "build" || v === "build manifest") ? "build" : "prepopulated";
+        })(),
+        // Off unless a run explicitly opts in. Guides can only add names to
+        // a pre-populated run when this is on.
+        allowWalkUps: ["yes", "y", "true", "1"].includes(
+          String(row["Allow Walk-Ups"] || row["Allow Walk Ups"] || "").trim().toLowerCase()),
         flightTime: parseTimeCell(row["Flight Time"]) || null,
         departureTime: parseTimeCell(row["Departure Time"]) || null,
         departurePriority: (function () {
@@ -4286,6 +4401,16 @@
     editManifestBtn.onclick = () => go("coord-manifest-edit");
     screen.appendChild(editManifestBtn);
 
+    const exportBtn = document.createElement("button");
+    exportBtn.className = "btn btn-secondary"; exportBtn.style.marginBottom = "10px"; exportBtn.textContent = "\u{1F4CB} Copy Passenger List";
+    exportBtn.onclick = () => { state.exportBackView = "coord-run-detail"; go("manifest-export"); };
+    screen.appendChild(exportBtn);
+
+    const comparePdfBtn = document.createElement("button");
+    comparePdfBtn.className = "btn btn-secondary"; comparePdfBtn.style.marginBottom = "10px"; comparePdfBtn.textContent = "\u{1F4C4} Compare PDF to Manifest";
+    comparePdfBtn.onclick = () => go("coord-compare-pdf");
+    screen.appendChild(comparePdfBtn);
+
     const editNotesBtn = document.createElement("button");
     editNotesBtn.className = "btn btn-secondary"; editNotesBtn.style.marginBottom = "16px"; editNotesBtn.textContent = "\u270F\uFE0F Edit Announcements / Notes";
     editNotesBtn.onclick = () => go("coord-edit-notes");
@@ -4715,6 +4840,346 @@
     return c;
   }
 
+  // ---------- Copy-ready passenger list ----------
+  // For handing a list to the venue team at short notice: plain text, one
+  // tap to copy, split per coach or as one list for the whole run.
+  function renderManifestExport() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Copy list", () => go(state.exportBackView || "coord-run-detail")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Copy passenger list</h2>`;
+
+    const sub = document.createElement("p");
+    sub.className = "subtitle";
+    sub.textContent = "Ready to paste into a message or email. Choose what to include, then copy.";
+    screen.appendChild(sub);
+
+    const optWrap = document.createElement("div");
+    optWrap.style.cssText = "display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px;";
+    screen.appendChild(optWrap);
+
+    const box = document.createElement("textarea");
+    box.readOnly = true;
+    box.style.cssText = "width:100%; min-height:300px; font-family:var(--mono); font-size:12.5px; line-height:1.5;";
+    screen.appendChild(box);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "btn btn-primary";
+    copyBtn.style.marginTop = "10px";
+    copyBtn.textContent = "\u{1F4CB} Copy to clipboard";
+    screen.appendChild(copyBtn);
+
+    const countLine = document.createElement("p");
+    countLine.className = "subtitle";
+    countLine.style.cssText = "font-size:12px; margin-top:8px;";
+    screen.appendChild(countLine);
+
+    function build() {
+      const scope = state.exportScope || "boarded";
+      const grouping = state.exportGrouping || "bybus";
+      const all = run.manifest || [];
+      const people = scope === "boarded" ? all.filter(p => p.boarded) : all;
+
+      const lines = [];
+      lines.push(run.runId + (run.description ? " \u2014 " + run.description : ""));
+      const route = [run.origin, run.destination].filter(Boolean).join(" \u2192 ");
+      if (route) lines.push(route);
+      if (run.date) lines.push(formatDateLabel(run.date));
+      lines.push(scope === "boarded" ? "On board: " + people.length : "Full manifest: " + people.length);
+      lines.push("");
+
+      if (grouping === "bybus") {
+        const buses = run.buses || [];
+        buses.forEach(b => {
+          const onThis = people.filter(p => p.busNum === b.num);
+          lines.push(`--- Bus ${b.num}${b.guideName ? " \u00b7 " + b.guideName : ""} (${onThis.length}) ---`);
+          onThis.slice().sort((x, y) => x.name.localeCompare(y.name)).forEach(p => {
+            lines.push(p.name + (p.specialNeeds && p.specialNeedsNote ? "  [" + p.specialNeedsNote + "]" : ""));
+          });
+          lines.push("");
+        });
+        const unassigned = people.filter(p => !p.busNum);
+        if (unassigned.length) {
+          lines.push(`--- Not assigned to a bus (${unassigned.length}) ---`);
+          unassigned.slice().sort((x, y) => x.name.localeCompare(y.name)).forEach(p => lines.push(p.name));
+          lines.push("");
+        }
+      } else {
+        people.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach(p => {
+          lines.push(p.name + (p.specialNeeds && p.specialNeedsNote ? "  [" + p.specialNeedsNote + "]" : ""));
+        });
+      }
+
+      box.value = lines.join("\n").trim();
+      countLine.textContent = `${people.length} name(s) included.`;
+    }
+
+    function paintOpts() {
+      optWrap.innerHTML = "";
+      const groups = [
+        { key: "exportScope", val: "boarded", label: "On board only" },
+        { key: "exportScope", val: "all", label: "Everyone on the manifest" },
+        { key: "exportGrouping", val: "bybus", label: "Split by bus" },
+        { key: "exportGrouping", val: "flat", label: "One list" },
+      ];
+      groups.forEach(g => {
+        const cur = state[g.key] || (g.key === "exportScope" ? "boarded" : "bybus");
+        const on = cur === g.val;
+        const b = document.createElement("button");
+        b.style.cssText = "flex:1 1 auto; min-width:104px; padding:7px 6px; font-size:11.5px; font-weight:700; border-radius:7px; cursor:pointer; border:1px solid " +
+          (on ? "var(--brand)" : "var(--border)") + ";" + (on ? " background:var(--brand); color:#fff;" : " background:var(--panel-alt); color:var(--text);");
+        b.textContent = g.label;
+        b.onclick = () => { state[g.key] = g.val; paintOpts(); build(); };
+        optWrap.appendChild(b);
+      });
+    }
+
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(box.value);
+        showToast("Copied to clipboard");
+      } catch (e) {
+        // Clipboard API needs a secure context; fall back to selecting the
+        // text so the guide can long-press and copy manually.
+        box.removeAttribute("readonly");
+        box.focus(); box.select();
+        document.execCommand && document.execCommand("copy");
+        box.setAttribute("readonly", "true");
+        showToast("Selected \u2014 press copy on your keyboard");
+      }
+    };
+
+    paintOpts();
+    build();
+    c.appendChild(screen);
+    return c;
+  }
+
+  // ---------- Coordinator: compare a server PDF against the app manifest ----------
+  // Reads the Transport Passengers List PDF, pulls out the passenger names,
+  // and diffs them against this run's manifest so discrepancies surface in
+  // one pass instead of being eyeballed line by line.
+  function parsePdfPassengers(text) {
+    // "Mr Charles Arnot (41) +1 604-316-8253 Abbotsford - CA"
+    // Title, then the name, then the age in brackets. Lines sometimes run
+    // together across page breaks ("...CAMr Reaghan Dormer (13)"), so this
+    // scans the whole blob rather than going line by line.
+    const re = /(?:Mr|Mrs|Miss|Ms|Dr|Master|Mstr)\.?\s+([A-Za-z\u00C0-\u024F'’\-\.]+(?:\s+[A-Za-z\u00C0-\u024F'’\-\.]+)*?)\s*\((\d{1,3})\)/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      out.push({ name: m.group ? m.group(1) : m[1], age: parseInt(m[2], 10) });
+    }
+    return out.map(p => ({ name: String(p.name).replace(/\s+/g, " ").trim(), age: p.age }));
+  }
+
+  function normName(n) {
+    return String(n || "")
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // fold accents so Zoë === Zoe
+      .replace(/[^a-z\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function renderCoordComparePdf() {
+    const run = state.currentRun;
+    const c = document.createElement("div");
+    c.appendChild(topbar(run.runId + " \u00b7 Compare PDF", () => go("coord-run-detail")));
+    const screen = document.createElement("div");
+    screen.className = "screen";
+    screen.innerHTML = `<h2>Compare PDF to manifest</h2>`;
+
+    const intro = document.createElement("p");
+    intro.className = "subtitle";
+    intro.textContent = "Upload the Transport Passengers List PDF from the server. Every name is matched against this run's manifest and anything that doesn't line up is listed below.";
+    screen.appendChild(intro);
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file"; fileInput.accept = ".pdf"; fileInput.style.display = "none";
+    screen.appendChild(fileInput);
+
+    const pickBtn = document.createElement("button");
+    pickBtn.className = "btn btn-primary";
+    pickBtn.style.marginBottom = "14px";
+    pickBtn.textContent = "\u{1F4C4} Choose PDF report";
+    pickBtn.onclick = () => fileInput.click();
+    screen.appendChild(pickBtn);
+
+    const resultHolder = document.createElement("div");
+    screen.appendChild(resultHolder);
+    let lastPdfText = "";  // survives re-comparisons after add/remove
+
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      if (typeof pdfjsLib === "undefined") {
+        resultHolder.innerHTML = `<div class="banner" style="border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);">PDF reader didn't load \u2014 check your connection and reload the app.</div>`;
+        return;
+      }
+      pickBtn.disabled = true; pickBtn.textContent = "Reading PDF\u2026";
+      resultHolder.innerHTML = "";
+      try {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        const buf = await file.arrayBuffer();
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        let text = "";
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          text += content.items.map(it => it.str).join(" ") + "\n";
+        }
+        lastPdfText = text;
+        renderComparison(text);
+      } catch (err) {
+        console.error(err);
+        resultHolder.innerHTML = `<div class="banner" style="border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);">Couldn't read that PDF. Make sure it's the Transport Passengers List report.</div>`;
+      }
+      pickBtn.disabled = false; pickBtn.textContent = "\u{1F4C4} Choose PDF report";
+    };
+
+    function renderComparison(text) {
+      const liveRun = state.currentRun || run;
+      const pdfPeople = parsePdfPassengers(text);
+      const statedTotal = (text.match(/PASSENGERS\s*TOTAL:\s*(\d+)/i) || [])[1];
+      const pdfRunId = (text.match(/C-\d{4}-[A-Z0-9]+-[A-Z0-9]+-C\d+/) || [])[0];
+
+      resultHolder.innerHTML = "";
+
+      if (!pdfPeople.length) {
+        resultHolder.innerHTML = `<div class="banner" style="border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);">No passenger names found in that PDF.</div>`;
+        return;
+      }
+
+      // Warn loudly if the PDF is for a different run than the one open.
+      if (pdfRunId && pdfRunId.toLowerCase() !== run.runId.toLowerCase()) {
+        const warn = document.createElement("div");
+        warn.className = "banner";
+        warn.style.cssText = "border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);";
+        warn.textContent = `\u26a0\ufe0f This PDF is for ${pdfRunId}, but you're viewing ${run.runId}. Compare anyway, or go back and open ${pdfRunId}.`;
+        resultHolder.appendChild(warn);
+      }
+
+      // Count-aware matching: two different people can share a name
+      // (the reports do contain e.g. two "Valerie Price"), so compare
+      // tallies rather than sets or one would silently vanish.
+      const pdfCounts = new Map(), appCounts = new Map();
+      pdfPeople.forEach(p => {
+        const k = normName(p.name);
+        if (!pdfCounts.has(k)) pdfCounts.set(k, { display: p.name, n: 0, ages: [] });
+        const e = pdfCounts.get(k); e.n++; if (p.age != null) e.ages.push(p.age);
+      });
+      (liveRun.manifest || []).forEach(p => {
+        const k = normName(p.name);
+        if (!appCounts.has(k)) appCounts.set(k, { display: p.name, n: 0, people: [] });
+        const e = appCounts.get(k); e.n++; e.people.push(p);
+      });
+
+      const missingFromApp = [];  // in PDF, not in app (or fewer in app)
+      const extraInApp = [];      // in app, not in PDF (or more in app)
+      let matched = 0;
+
+      pdfCounts.forEach((pv, k) => {
+        const av = appCounts.get(k);
+        const have = av ? av.n : 0;
+        matched += Math.min(pv.n, have);
+        for (let i = have; i < pv.n; i++) {
+          missingFromApp.push({ name: pv.display, age: pv.ages[i] });
+        }
+      });
+      appCounts.forEach((av, k) => {
+        const pv = pdfCounts.get(k);
+        const want = pv ? pv.n : 0;
+        for (let i = want; i < av.n; i++) {
+          extraInApp.push(av.people[i]);
+        }
+      });
+
+      // ---- summary ----
+      const summary = document.createElement("div");
+      summary.className = "stat-strip";
+      summary.style.marginBottom = "6px";
+      summary.innerHTML = `<div class="stat-box"><div class="num">${pdfPeople.length}</div><div class="lbl">In PDF</div></div>
+        <div class="stat-box"><div class="num">${(liveRun.manifest || []).length}</div><div class="lbl">In app</div></div>
+        <div class="stat-box"><div class="num" style="color:var(--green);">${matched}</div><div class="lbl">Matched</div></div>`;
+      resultHolder.appendChild(summary);
+
+      const diffStrip = document.createElement("div");
+      diffStrip.className = "stat-strip";
+      diffStrip.style.marginBottom = "10px";
+      diffStrip.innerHTML = `<div class="stat-box" style="${missingFromApp.length ? "border:1px solid var(--accent);" : ""}"><div class="num" style="${missingFromApp.length ? "color:var(--accent);" : ""}">${missingFromApp.length}</div><div class="lbl">Missing from app</div></div>
+        <div class="stat-box" style="${extraInApp.length ? "border:1px solid var(--status-amber);" : ""}"><div class="num" style="${extraInApp.length ? "color:var(--status-amber);" : ""}">${extraInApp.length}</div><div class="lbl">Not on PDF</div></div>`;
+      resultHolder.appendChild(diffStrip);
+
+      if (statedTotal && parseInt(statedTotal, 10) !== pdfPeople.length) {
+        const n = document.createElement("p");
+        n.className = "subtitle";
+        n.style.cssText = "font-size:12px; color:var(--accent);";
+        n.textContent = `Note: the PDF says PASSENGERS TOTAL: ${statedTotal} but ${pdfPeople.length} names were read. Worth a manual check.`;
+        resultHolder.appendChild(n);
+      }
+
+      if (!missingFromApp.length && !extraInApp.length) {
+        const ok = document.createElement("div");
+        ok.className = "banner";
+        ok.style.cssText = "border-left-color:var(--green); background:var(--green-dim); color:var(--green);";
+        ok.textContent = "\u2713 Perfect match \u2014 every name on the PDF is on the manifest, and nothing extra.";
+        resultHolder.appendChild(ok);
+        return;
+      }
+
+      // ---- missing from app ----
+      if (missingFromApp.length) {
+        const h = document.createElement("h3");
+        h.style.marginTop = "14px";
+        h.textContent = `On the PDF but not in the app (${missingFromApp.length})`;
+        resultHolder.appendChild(h);
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.cssText = "padding:10px 12px; margin-bottom:8px;";
+        missingFromApp.forEach(p => {
+          const r = document.createElement("div");
+          r.style.cssText = "padding:6px 0; border-bottom:1px solid var(--border); font-size:13.5px;";
+          r.textContent = p.name + (p.age != null ? `  (${p.age})` : "");
+          card.appendChild(r);
+        });
+        resultHolder.appendChild(card);
+
+      }
+
+      // ---- extra in app ----
+      if (extraInApp.length) {
+        const h = document.createElement("h3");
+        h.style.marginTop = "14px";
+        h.textContent = `In the app but not on the PDF (${extraInApp.length})`;
+        resultHolder.appendChild(h);
+        const note = document.createElement("p");
+        note.className = "subtitle";
+        note.style.cssText = "font-size:12px; margin-top:-6px;";
+        note.textContent = "Flagged for you to check \u2014 they may be late additions the report predates.";
+        resultHolder.appendChild(note);
+
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.cssText = "padding:10px 12px; margin-bottom:8px;";
+        extraInApp.forEach(p => {
+          const r = document.createElement("div");
+          r.style.cssText = "padding:6px 0; border-bottom:1px solid var(--border); font-size:13.5px; display:flex; justify-content:space-between; gap:8px;";
+          r.innerHTML = `<span>${esc(p.name)}</span>${p.boarded ? `<span style="font-size:11px; font-weight:700; color:var(--green); white-space:nowrap;">BOARDED</span>` : ""}`;
+          card.appendChild(r);
+        });
+        resultHolder.appendChild(card);
+
+      }
+    }
+
+    c.appendChild(screen);
+    return c;
+  }
+
   // ---------- Coordinator: edit a run's details ----------
   // Everything about a run except its ID and manifest. Changing the coach
   // count is the delicate part: shrinking a run can strand passengers who
@@ -4781,6 +5246,75 @@
     cateringLbl.textContent = "Catering on this run";
     cateringRow.appendChild(cateringCheck); cateringRow.appendChild(cateringLbl);
     screen.appendChild(cateringRow);
+
+    // ---- manifest mode ----
+    const mmHead = document.createElement("h3");
+    mmHead.textContent = "Manifest mode";
+    mmHead.style.marginTop = "18px";
+    screen.appendChild(mmHead);
+
+    const mmNote = document.createElement("p");
+    mmNote.className = "subtitle";
+    mmNote.style.cssText = "font-size:12.5px; margin-top:-6px;";
+    mmNote.textContent = "How the guide handles names on this run.";
+    screen.appendChild(mmNote);
+
+    let chosenMode = run.manifestMode === "build" ? "build" : "prepopulated";
+    const mmWrap = document.createElement("div");
+    mmWrap.style.cssText = "display:flex; flex-direction:column; gap:8px; margin-bottom:14px;";
+    let paintModes = function () {
+      mmWrap.innerHTML = "";
+      [
+        ["prepopulated", "Pre-populated list", "Names are loaded ahead of time. The guide ticks people off as they board."],
+        ["build", "Build manifest", "Coach loads freely with no checking. The guide types in who's aboard after departure."],
+      ].forEach(([val, title, desc]) => {
+        const on = chosenMode === val;
+        const b = document.createElement("button");
+        b.style.cssText = "all:unset; cursor:pointer; display:block; padding:11px 13px; border-radius:9px; border:1px solid " +
+          (on ? "var(--brand)" : "var(--border)") + ";" + (on ? " background:var(--brand-dim);" : " background:var(--panel);");
+        b.innerHTML = `<div style="display:flex; align-items:center; gap:9px;">
+            <div class="checkbox" style="${on ? "background:var(--brand); border-color:var(--brand); color:#fff;" : ""}">${on ? "\u2713" : ""}</div>
+            <div><div style="font-weight:700; font-size:13.5px; color:${on ? "var(--brand)" : "var(--text)"};">${title}</div>
+            <div style="font-size:12px; color:var(--text-dim); margin-top:2px;">${desc}</div></div>
+          </div>`;
+        b.onclick = () => { chosenMode = val; paintModes(); };
+        mmWrap.appendChild(b);
+      });
+    };
+    // Walk-ups: only meaningful on a pre-populated run, since build runs
+    // are nothing but typed-in names. Hidden when build mode is selected.
+    let allowWalkUps = !!run.allowWalkUps;
+    const wuWrap = document.createElement("div");
+    wuWrap.style.cssText = "margin-bottom:14px;";
+    function paintWalkUps() {
+      wuWrap.innerHTML = "";
+      if (chosenMode === "build") {
+        const n = document.createElement("p");
+        n.className = "subtitle";
+        n.style.cssText = "font-size:12px; margin:0;";
+        n.textContent = "Build runs always let the guide type names in \u2014 no extra setting needed.";
+        wuWrap.appendChild(n);
+        return;
+      }
+      const on = allowWalkUps;
+      const b = document.createElement("button");
+      b.style.cssText = "all:unset; cursor:pointer; display:block; padding:11px 13px; border-radius:9px; border:1px solid " +
+        (on ? "var(--accent)" : "var(--border)") + ";" + (on ? " background:var(--accent-dim);" : " background:var(--panel);");
+      b.innerHTML = `<div style="display:flex; align-items:center; gap:9px;">
+          <div class="checkbox" style="${on ? "background:var(--accent); border-color:var(--accent); color:#fff;" : ""}">${on ? "\u2713" : ""}</div>
+          <div><div style="font-weight:700; font-size:13.5px; color:${on ? "var(--accent)" : "var(--text)"};">Allow walk-ups on this run</div>
+          <div style="font-size:12px; color:var(--text-dim); margin-top:2px;">Lets the guide add guests who turn up but aren't on the list. Off by default \u2014 turn on only where extras are expected.</div></div>
+        </div>`;
+      b.onclick = () => { allowWalkUps = !allowWalkUps; paintWalkUps(); };
+      wuWrap.appendChild(b);
+    }
+
+    const origPaintModes = paintModes;
+    paintModes = function () { origPaintModes(); paintWalkUps(); };
+
+    paintModes();
+    screen.appendChild(mmWrap);
+    screen.appendChild(wuWrap);
 
     // ---- coach count ----
     const busHead = document.createElement("h3");
@@ -4897,6 +5431,8 @@
         stagingLocation: stageInput.value.trim(),
         busCompany: companyInput.value,
         catering: cateringCheck.checked,
+        manifestMode: chosenMode,
+        allowWalkUps: chosenMode === "build" ? false : allowWalkUps,
       };
 
       saveBtn.disabled = true; saveBtn.textContent = "Saving\u2026";
