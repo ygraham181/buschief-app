@@ -997,8 +997,8 @@
       run.manifest.forEach(p => counts[mealCategory(p)]++);
       manCard.innerHTML = `<div class="stat-strip" style="margin-bottom:10px;">
           <div class="stat-box"><div class="num">${run.manifest.length}</div><div class="lbl">Total</div></div>
-          <div class="stat-box"><div class="num" style="${counts.allergy ? "color:var(--accent);" : ""}">${counts.allergy}</div><div class="lbl">Allergy box</div></div>
-          <div class="stat-box"><div class="num" style="${counts.extra ? "color:var(--brand);" : ""}">${counts.extra}</div><div class="lbl">Extra special</div></div>
+          <div class="stat-box"><div class="num" style="${counts.allergy ? "color:var(--accent);" : ""}">${counts.allergy}</div><div class="lbl">Allergen Meals</div></div>
+          <div class="stat-box"><div class="num" style="${counts.extra ? "color:var(--brand);" : ""}">${counts.extra}</div><div class="lbl">Special Dietary Care</div></div>
           <div class="stat-box"><div class="num" style="${counts.other ? "color:var(--status-amber);" : ""}">${counts.other}</div><div class="lbl">Other need</div></div>
         </div>`;
 
@@ -1706,8 +1706,8 @@
       function mealStripHtml() {
         const c = mealCounts();
         return `<div class="stat-box"><div class="num">${c.regular}</div><div class="lbl">Regular</div></div>
-          <div class="stat-box" style="${c.allergy ? "border:1px solid var(--accent);" : ""}"><div class="num" style="${c.allergy ? "color:var(--accent);" : ""}">${c.allergy}</div><div class="lbl">Allergy box</div></div>
-          <div class="stat-box" style="${c.extra ? "border:1px solid var(--brand); background:var(--brand-dim);" : ""}"><div class="num" style="${c.extra ? "color:var(--brand);" : ""}">${c.extra}</div><div class="lbl">Extra special</div></div>
+          <div class="stat-box" style="${c.allergy ? "border:1px solid var(--accent);" : ""}"><div class="num" style="${c.allergy ? "color:var(--accent);" : ""}">${c.allergy}</div><div class="lbl">Allergen Meals</div></div>
+          <div class="stat-box" style="${c.extra ? "border:1px solid var(--brand); background:var(--brand-dim);" : ""}"><div class="num" style="${c.extra ? "color:var(--brand);" : ""}">${c.extra}</div><div class="lbl">Special Dietary Care</div></div>
           <div class="stat-box" style="${c.other ? "border:1px solid var(--status-amber);" : ""}"><div class="num" style="${c.other ? "color:var(--status-amber);" : ""}">${c.other}</div><div class="lbl">Other need</div></div>`;
       }
       mealStrip.innerHTML = mealStripHtml();
@@ -1715,7 +1715,7 @@
       const mealNote = document.createElement("p");
       mealNote.className = "subtitle";
       mealNote.style.cssText = "font-size:12px; margin-top:4px; margin-bottom:10px;";
-      mealNote.textContent = "Meals for passengers boarded on this bus. Extra special boxes are named \u2014 hand each one to that guest only. \u201cOther need\u201d is a non-food need (mobility, assistance) \u2014 no box required.";
+      mealNote.textContent = "Meals for passengers boarded on this bus. Special Dietary Care Meals are named \u2014 hand each one to that guest only. \u201cOther need\u201d is a non-food need (mobility, assistance) \u2014 no meal required.";
       bodyHolder.appendChild(mealNote);
 
       // Who's still missing, across the whole run (boarding is fluid between
@@ -3203,8 +3203,8 @@
     needsLabel.style.marginTop = "10px";
     const needsInput = document.createElement("select");
     [["", "None \u2014 regular meal"],
-     ["Allergy box", "Allergy box \u2014 standard allergen meal"],
-     ["Extra special allergy box", "Extra special allergy box \u2014 named, that guest only"],
+     ["Allergen Meal", "Allergen Meal \u2014 standard allergen box"],
+     ["Special Dietary Care Meal", "Special Dietary Care Meal \u2014 named, that guest only"],
      ["Mobility assistance", "Other need \u2014 mobility assistance (no meal)"],
      ["Assistance required", "Other need \u2014 assistance required (no meal)"]]
       .forEach(([v, lbl]) => {
@@ -3709,8 +3709,8 @@
     const manifestData = [
       ["Run ID", "Passenger Name", "Special Needs", "Mobile"],
       ["RUN-001", "Jane Rider", "", "+1 555 010 2233"],
-      ["RUN-001", "John Traveler", "Allergy box", "+1 555 010 4455"],
-      ["RUN-001", "Alex Guest", "Extra special allergy box", ""],
+      ["RUN-001", "John Traveler", "Allergen Meal", "+1 555 010 4455"],
+      ["RUN-001", "Alex Guest", "Special Dietary Care Meal", ""],
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(runsData), "Runs");
@@ -3750,10 +3750,13 @@
   function mealCategory(person) {
     const note = String((person && person.specialNeedsNote) || "").toLowerCase();
     if (!person || !person.specialNeeds) return "regular";
-    // "extra special" = a named box for that guest only.
-    if (note.includes("extra special")) return "extra";
+    // Named meal for that guest only. Accepts the current wording
+    // ("special dietary care") and the older "extra special allergy box"
+    // so manifests imported before the rename still categorise correctly.
+    if (note.includes("special dietary care") || note.includes("extra special") ||
+        note.includes("dietary care")) return "extra";
     // Anything mentioning an allergy/dietary need takes a standard allergen box.
-    if (note.includes("allerg") || note.includes("diet") || note.includes("gluten") ||
+    if (note.includes("allergen") || note.includes("allerg") || note.includes("diet") || note.includes("gluten") ||
         note.includes("vegan") || note.includes("vegetarian") || note.includes("celiac") ||
         note.includes("coeliac") || note.includes("nut") || note.includes("dairy") ||
         note.includes("lactose") || note.includes("halal") || note.includes("kosher") ||
@@ -3764,7 +3767,7 @@
     return "other";
   }
   function mealLabel(cat) {
-    return cat === "extra" ? "Extra special" : cat === "allergy" ? "Allergy" : cat === "other" ? "Other need" : "Regular";
+    return cat === "extra" ? "Special Dietary Care Meal" : cat === "allergy" ? "Allergen Meal" : cat === "other" ? "Other need" : "Regular";
   }
   function mealColor(cat) {
     return cat === "extra" ? "var(--brand)" : cat === "allergy" ? "var(--accent)" : cat === "other" ? "var(--status-amber)" : "var(--text-dim)";
@@ -4451,14 +4454,14 @@
       strip2.className = "stat-strip";
       strip2.style.marginTop = "8px";
       strip2.innerHTML = `<div class="stat-box"><div class="num">${cc.regular}</div><div class="lbl">Regular</div></div>
-        <div class="stat-box"><div class="num" style="${cc.allergy ? "color:var(--accent);" : ""}">${cc.allergy}</div><div class="lbl">Allergy box</div></div>
-        <div class="stat-box"><div class="num" style="${cc.extra ? "color:var(--brand);" : ""}">${cc.extra}</div><div class="lbl">Extra special</div></div>
+        <div class="stat-box"><div class="num" style="${cc.allergy ? "color:var(--accent);" : ""}">${cc.allergy}</div><div class="lbl">Allergen Meals</div></div>
+        <div class="stat-box"><div class="num" style="${cc.extra ? "color:var(--brand);" : ""}">${cc.extra}</div><div class="lbl">Special Dietary Care</div></div>
         <div class="stat-box"><div class="num" style="${cc.other ? "color:var(--status-amber);" : ""}">${cc.other}</div><div class="lbl">Other need</div></div>`;
       statsHolder.appendChild(strip2);
       const mealNote = document.createElement("p");
       mealNote.className = "subtitle";
       mealNote.style.cssText = "font-size:12px; margin-top:6px;";
-      mealNote.textContent = "Meals to order = Allergy box + Extra special. \u201cOther need\u201d is not a meal and is excluded from those counts.";
+      mealNote.textContent = "Meals to order = Allergen Meals + Special Dietary Care Meals. \u201cOther need\u201d is not a meal and is excluded from those counts.";
       statsHolder.appendChild(mealNote);
 
       // Quick filter \u2014 reviewing 139 names to find the flagged handful is
@@ -4468,8 +4471,8 @@
       [
         ["all", "All"],
         ["flagged", "Flagged only"],
-        ["allergy", "Allergy"],
-        ["extra", "Extra special"],
+        ["allergy", "Allergen"],
+        ["extra", "Special Dietary"],
         ["other", "Other need"],
       ].forEach(([f, lbl]) => {
         const b = document.createElement("button");
@@ -4504,8 +4507,8 @@
     async function setPersonCategory(personId, cat, customNote) {
       const preset = {
         regular: { flag: false, note: "" },
-        allergy: { flag: true, note: "Allergy box" },
-        extra:   { flag: true, note: "Extra special allergy box" },
+        allergy: { flag: true, note: "Allergen Meal" },
+        extra:   { flag: true, note: "Special Dietary Care Meal" },
         other:   { flag: true, note: customNote || "Assistance required" },
       }[cat];
       if (!preset) return;
@@ -4564,8 +4567,8 @@
         catRow.style.cssText = "display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;";
         [
           ["regular", "Regular"],
-          ["allergy", "Allergy box"],
-          ["extra", "Extra special"],
+          ["allergy", "Allergen Meal"],
+          ["extra", "Special Dietary"],
           ["other", "Other need"],
         ].forEach(([cat, label]) => {
           const b = document.createElement("button");
