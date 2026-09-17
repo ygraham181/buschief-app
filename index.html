@@ -214,7 +214,14 @@
   ];
   const ORIGINS = DESTINATIONS.filter(d => d !== "JFK Terminal 8"); // LGA is allowed as an origin too — only JFK T8 stays destination-only
   const MAX_BUSES = 12; // guide slots per run — some runs carry more guides than coaches
-  const HALL_NAMES = new Set(["Westfield Hall", "New York Hall"]); // the only two locations Courtesy Flow's Arrival to Hall tab should ever show
+  // Venues the courtesy team actually staffs. Arrivals show runs ending at
+  // one of these; departures show runs starting at one. The Friday boat
+  // transfers run halls <-> Pier 14 and the Delta Hotel, so those are staffed
+  // venues too, not just the two meeting halls.
+  const HALL_NAMES = new Set([
+    "Westfield Hall", "New York Hall",
+    "Pier 14 - Hoboken", "Delta Hotel - Basking Ridge",
+  ]);
   const AUTH_SESSION_MS = 60 * 60 * 1000; // stay signed in for 60 minutes of inactivity — applies to every role, not just the coordinator
   function getChecklistItems(run) {
     const items = [
