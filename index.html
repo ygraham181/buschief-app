@@ -365,10 +365,22 @@
     // everything rather than showing an empty app.
     return scoped.length ? scoped : state.runIndex;
   }
+  // Resilient by design: Promise.all rejects the WHOLE batch if any single
+  // read fails, which under load meant one dropped connection blanked the
+  // entire Dashboard / Courtesy Flow / Help Desk screen. Each run is now
+  // caught individually so a partial result still renders.
+  let lastScopedLoadMissing = 0;
   async function loadScopedRuns() {
     const entries = scopedIndexEntries();
+    lastScopedLoadMissing = 0;
     if (!entries.length) return [];
-    return (await Promise.all(entries.map(e => loadRun(e.runId)))).filter(Boolean);
+    const settled = await Promise.all(entries.map(async e => {
+      try { return await loadRun(e.runId); }
+      catch (err) { console.error("run load failed", e.runId, err); return null; }
+    }));
+    const ok = settled.filter(Boolean);
+    lastScopedLoadMissing = entries.length - ok.length;
+    return ok;
   }
 
 
@@ -2116,11 +2128,17 @@
       // live-glance views (Dashboard, Courtesy Flow, Fleet Map) refresh on their own.
       if (state.coordTab === "settings" || state.coordTab === "search" || state.coordTab === "passengers") return;
       lastReadFailed = false;
-      await loadIndex();
-      const runs = state.runIndex.length
-        ? await loadScopedRuns()
-        : [];
-      const roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
+      let runs = [], roster = [];
+      try {
+        await loadIndex();
+        runs = state.runIndex.length ? await loadScopedRuns() : [];
+        roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
+      } catch (err) {
+        // A failed background refresh must never wipe what's already on
+        // screen — leave the last good render in place and try again next tick.
+        console.error("background refresh failed", err);
+        return;
+      }
       if (state.view !== "coord-home") return;
       if (state.coordTab === "settings" || state.coordTab === "search" || state.coordTab === "passengers") return;
       if (state.coordTab !== "map") destroyFleetMap();
@@ -2130,7 +2148,29 @@
       else if (state.coordTab === "map") contentHolder.appendChild(buildFleetMapTab(runs, roster));
     }
 
+    function showTabError(msg) {
+      contentHolder.innerHTML = "";
+      const box = document.createElement("div");
+      box.className = "banner";
+      box.style.cssText = "border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);";
+      box.textContent = msg;
+      contentHolder.appendChild(box);
+      const btn = document.createElement("button");
+      btn.className = "btn btn-primary";
+      btn.textContent = "Try again";
+      btn.onclick = () => renderCurrentTab();
+      contentHolder.appendChild(btn);
+    }
+
     async function renderCurrentTab() {
+      try { await renderCurrentTabInner(); }
+      catch (err) {
+        console.error("tab render failed", err);
+        showTabError("Couldn't load this screen just now \u2014 the system is busy. Your data is safe.");
+      }
+    }
+
+    async function renderCurrentTabInner() {
       // Always hydrate the run index from the database first — never build
       // any tab (Settings included) off whatever state.runIndex happens to
       // be in memory, which could still be the empty default right after a
