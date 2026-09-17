@@ -353,17 +353,23 @@
     }
     return keep;
   }
+  function asIndexArray(v) {
+    if (Array.isArray(v)) return v;
+    if (v && typeof v === "object") return Object.values(v);   // Firebase can hand back an object
+    return [];
+  }
   function scopedIndexEntries() {
-    if (state.loadAllDays) return state.runIndex;
+    const idx = asIndexArray(state.runIndex).filter(r => r && r.runId);
+    if (state.loadAllDays) return idx;
     const keep = activeRunIdSet();
-    const scoped = state.runIndex.filter(r => {
+    const scoped = idx.filter(r => {
       const d = runIdDateMMDD(r.runId);
       if (!d) return true;                    // unparseable ID: never hide it
       return keep.has(d.month + "-" + d.day);
     });
     // If nothing matches (wrong dates, or the event is over), fall back to
     // everything rather than showing an empty app.
-    return scoped.length ? scoped : state.runIndex;
+    return scoped.length ? scoped : idx;
   }
   // Resilient by design: Promise.all rejects the WHOLE batch if any single
   // read fails, which under load meant one dropped connection blanked the
@@ -384,7 +390,40 @@
   }
 
 
-  async function loadRun(runId) { return await getJSON("run-" + runId, null); }
+  // Every run passes through here, so this is the one place that can
+  // guarantee the shape the rest of the app assumes. A run document missing
+  // `buses` or `manifest` (a partial or raced write) used to throw a
+  // TypeError deep inside aggregateStatus/buildDashboardTab and take out the
+  // whole screen — and because Dashboard and Courtesy Flow walk EVERY run,
+  // one bad document broke them for everyone.
+  function normalizeRun(run, runId) {
+    if (!run || typeof run !== "object") return null;
+    if (!run.runId) run.runId = runId;
+    // Firebase can hand back arrays as objects; accept either.
+    const toArr = v => Array.isArray(v) ? v : (v && typeof v === "object" ? Object.values(v) : []);
+    run.buses = toArr(run.buses).filter(b => b && typeof b === "object");
+    run.buses.forEach((b, i) => {
+      if (typeof b.num !== "number") b.num = i + 1;
+      if (!b.status || STATUS_ORDER.indexOf(b.status) === -1) b.status = "Not Started";
+    });
+    run.manifest = toArr(run.manifest).filter(p => p && typeof p === "object" && p.name);
+    run.manifest.forEach((p, i) => { if (!p.id) p.id = (run.runId || "run") + "-fix-" + i; });
+    if (typeof run.numBuses !== "number" || run.numBuses < 1) run.numBuses = Math.max(1, run.buses.length);
+    if (!run.buses.length) {
+      // Never leave a run with zero coaches — the UI assumes at least one.
+      run.buses = [{ num: 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null,
+        completedAt: null, eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false,
+        cateringLoadedAt: null, guideArrived: false, guideArrivedAt: null, busArrived: false,
+        busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null, checklistBypassed: false }];
+    }
+    return run;
+  }
+  async function loadRun(runId) {
+    const raw = await getJSON("run-" + runId, null);
+    const norm = normalizeRun(raw, runId);
+    if (raw && !norm) console.error("run document unusable", runId, raw);
+    return norm;
+  }
   async function saveRun(run) { run.updatedAt = Date.now(); await setJSON("run-" + run.runId, run); scheduleSync(run); }
 
   // Safe concurrent-write helper — backed by Firebase's native transaction()
@@ -507,17 +546,36 @@
     state.toast = msg; render();
     setTimeout(() => { const el = document.getElementById("toast-el"); if (el) el.classList.remove("show"); }, 1800);
   }
-  function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-  function startPolling(fn, ms) { stopPolling(); pollTimer = setInterval(fn, ms); }
+  let pollVisibilityHandler = null;
+  function stopPolling() {
+    if (pollVisibilityHandler && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", pollVisibilityHandler);
+      pollVisibilityHandler = null;
+    } if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+  // Phones sitting in pockets were still polling on a timer, which is pure
+  // waste and a large share of total traffic at an event this size. Skip any
+  // tick while the app isn't actually on screen, and refresh once as soon as
+  // it comes back so nothing looks stale.
+  function startPolling(fn, ms) {
+    stopPolling();
+    pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      fn();
+    }, ms);
+    pollVisibilityHandler = () => {
+      if (typeof document !== "undefined" && !document.hidden) fn();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", pollVisibilityHandler);
+  }
   function stopEtaTimer() { if (etaTimer) { clearInterval(etaTimer); etaTimer = null; } }
   function stopGeo() { if (geoWatchId !== null && navigator.geolocation) { navigator.geolocation.clearWatch(geoWatchId); geoWatchId = null; } }
   function teardownGuideSession() { stopPolling(); stopEtaTimer(); stopGeo(); }
   function go(view) { state.view = view; render(); }
 
-  function busBoardedCount(run, busNum) { return run.manifest.filter(p => p.boarded && p.busNum === busNum).length; }
-  function totalBoarded(run) { return run.manifest.filter(p => p.boarded).length; }
+  function busBoardedCount(run, busNum) { return (run && Array.isArray(run.manifest) ? run.manifest : []).filter(p => p.boarded && p.busNum === busNum).length; }
+  function totalBoarded(run) { return (run && Array.isArray(run.manifest) ? run.manifest : []).filter(p => p.boarded).length; }
   function aggregateStatus(run) {
-    if (!run.buses.length) return "Not Started";
+    if (!run || !Array.isArray(run.buses) || !run.buses.length) return "Not Started";
     let minIdx = STATUS_ORDER.length - 1;
     run.buses.forEach(b => { minIdx = Math.min(minIdx, STATUS_ORDER.indexOf(b.status)); });
     return STATUS_ORDER[minIdx];
@@ -773,7 +831,7 @@
     await loadIndex();
     state.guideBus = null;
     go("guide-run-select");
-    startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000);
+    startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 20000);
   }
 
   function renderGuidePin() {
@@ -1408,7 +1466,7 @@
       // that's already done — go straight to the run list instead.
       if (myBus().status === "Completed") {
         teardownGuideSession();
-        loadIndex().then(() => { go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000); });
+        loadIndex().then(() => { go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 20000); });
       } else {
         go("guide-setup");
       }
@@ -1418,7 +1476,7 @@
 
     const switchLink = document.createElement("button");
     switchLink.className = "link-btn"; switchLink.style.marginBottom = "14px"; switchLink.textContent = "Not your run? Switch run";
-    switchLink.onclick = async () => { teardownGuideSession(); await loadIndex(); go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 6000); };
+    switchLink.onclick = async () => { teardownGuideSession(); await loadIndex(); go("guide-run-select"); startPolling(async () => { await loadIndex(); if (state.view === "guide-run-select") render(); }, 20000); };
     screen.appendChild(switchLink);
 
     const bodyHolder = document.createElement("div");
@@ -2131,7 +2189,7 @@
       let runs = [], roster = [];
       try {
         await loadIndex();
-        runs = state.runIndex.length ? await loadScopedRuns() : [];
+        runs = await loadScopedRuns();
         roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
       } catch (err) {
         // A failed background refresh must never wipe what's already on
@@ -2154,6 +2212,7 @@
       box.className = "banner";
       box.style.cssText = "border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);";
       box.textContent = msg;
+      box.style.whiteSpace = "pre-wrap";
       contentHolder.appendChild(box);
       const btn = document.createElement("button");
       btn.className = "btn btn-primary";
@@ -2166,7 +2225,7 @@
       try { await renderCurrentTabInner(); }
       catch (err) {
         console.error("tab render failed", err);
-        showTabError("Couldn't load this screen just now \u2014 the system is busy. Your data is safe.");
+        showTabError("Couldn't load this screen just now \u2014 the system is busy. Your data is safe.\n\nDetail: " + (err && err.message ? err.message : String(err)));
       }
     }
 
@@ -2177,9 +2236,7 @@
       // fresh page load.
       lastReadFailed = false;
       await loadIndex();
-      const runs = state.runIndex.length
-        ? await loadScopedRuns()
-        : [];
+      const runs = await loadScopedRuns();
       if (state.coordTab !== "map") destroyFleetMap();
       contentHolder.innerHTML = "";
       if (state.coordTab === "dashboard") contentHolder.appendChild(buildDashboardTab(runs));
@@ -3039,9 +3096,7 @@
     async function refresh() {
       if (state.view !== "courtesy-home") return;
       await loadIndex();
-      const runs = state.runIndex.length
-        ? await loadScopedRuns()
-        : [];
+      const runs = await loadScopedRuns();
       const roster = await loadRoster();
       if (state.view !== "courtesy-home") return;
       holder.innerHTML = "";
@@ -3134,9 +3189,7 @@
     async function refresh() {
       if (state.view !== "helpdesk-home") return;
       await loadIndex();
-      const runs = state.runIndex.length
-        ? await loadScopedRuns()
-        : [];
+      const runs = await loadScopedRuns();
       const roster = await loadRoster();
       if (state.view !== "helpdesk-home") return;
       contentHolder.innerHTML = "";
