@@ -275,6 +275,7 @@
     manifestCatFilter: "all",
     guideAddNames: "",
     coordRunQuery: "",
+    loadAllDays: false,
     hdCompletedQuery: "",
     hdOpenCompleted: null,
     exportScope: "boarded",
@@ -331,6 +332,46 @@
   }
 
   async function loadIndex() { state.runIndex = await getJSON("run-index", []); }
+
+  // ---------- URGENT LOAD REDUCTION (live event) ----------
+  // The list views were pulling every run in the event, each with its full
+  // passenger manifest, on every open and every refresh. Across ~68 runs
+  // that is thousands of passenger records per view, per device, per poll —
+  // which is what makes these screens slow or blank out under load.
+  // Run IDs encode their date (C-MMDD-...), so we can narrow the fetch
+  // BEFORE reading any run. Default: today and tomorrow only.
+  function runIdDateMMDD(runId) {
+    const m = String(runId || "").match(/^C-(\d{2})(\d{2})/);
+    return m ? { month: parseInt(m[1], 10), day: parseInt(m[2], 10) } : null;
+  }
+  function activeRunIdSet() {
+    const now = new Date();
+    const keep = new Set();
+    for (let offset = 0; offset <= 1; offset++) {   // today + tomorrow
+      const d = new Date(now.getTime() + offset * 86400000);
+      keep.add((d.getMonth() + 1) + "-" + d.getDate());
+    }
+    return keep;
+  }
+  function scopedIndexEntries() {
+    if (state.loadAllDays) return state.runIndex;
+    const keep = activeRunIdSet();
+    const scoped = state.runIndex.filter(r => {
+      const d = runIdDateMMDD(r.runId);
+      if (!d) return true;                    // unparseable ID: never hide it
+      return keep.has(d.month + "-" + d.day);
+    });
+    // If nothing matches (wrong dates, or the event is over), fall back to
+    // everything rather than showing an empty app.
+    return scoped.length ? scoped : state.runIndex;
+  }
+  async function loadScopedRuns() {
+    const entries = scopedIndexEntries();
+    if (!entries.length) return [];
+    return (await Promise.all(entries.map(e => loadRun(e.runId)))).filter(Boolean);
+  }
+
+
   async function loadRun(runId) { return await getJSON("run-" + runId, null); }
   async function saveRun(run) { run.updatedAt = Date.now(); await setJSON("run-" + run.runId, run); scheduleSync(run); }
 
@@ -523,6 +564,20 @@
   const COORD_VIEWS = new Set(["coord-home", "coord-create", "coord-run-detail", "coord-bus-detail", "coord-sheet-settings", "coord-manifest-edit", "coord-edit-notes", "coord-edit-run", "coord-compare-pdf", "manifest-export"]);
 
   function render() {
+    try { return renderInner(); }
+    catch (err) {
+      console.error("render failed", err);
+      const app = document.getElementById("app");
+      if (app) {
+        app.innerHTML = `<div class="screen"><div class="banner" style="border-left-color:var(--accent); background:var(--accent-dim); color:var(--accent);">
+            Something went wrong drawing this screen. Your data is safe.
+          </div><button class="btn btn-primary" id="err-reload">Reload the app</button></div>`;
+        const rl = document.getElementById("err-reload");
+        if (rl) rl.onclick = () => location.reload();
+      }
+    }
+  }
+  function renderInner() {
     // Any activity while on a coordinator screen keeps the 10-minute session alive.
     // If the session has expired, drop back to the password screen instead of
     // whatever coordinator screen was requested.
@@ -784,7 +839,20 @@
         holder.innerHTML = `<div class="empty-state"><div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.</div>`;
         return;
       }
-      const fullRuns = (await Promise.all(myEntries.map(e => loadRun(e.runId)))).filter(Boolean);
+      // Load each run independently. One failed read (a dropped connection
+      // under load) must not take down the whole screen — better to show the
+      // runs that did load than a blank page.
+      const settled = await Promise.all(myEntries.map(async e => {
+        try { return await loadRun(e.runId); } catch (err) { console.error("run load failed", e.runId, err); return null; }
+      }));
+      const fullRuns = settled.filter(Boolean);
+      if (fullRuns.length && fullRuns.length < myEntries.length) {
+        const warn = document.createElement("div");
+        warn.className = "banner";
+        warn.style.cssText = "border-left-color:var(--status-amber); background:var(--status-amber-dim); color:var(--status-amber);";
+        warn.textContent = `${myEntries.length - fullRuns.length} of your run(s) couldn't load just now \u2014 pull down to retry. The rest are below.`;
+        holder.appendChild(warn);
+      }
       if (!fullRuns.length) {
         holder.innerHTML = `<div class="empty-state"><div class="big">\u{1F68C}</div>No runs assigned to you yet.<br/>Ask your coordinator to assign you to a bus.</div>`;
         return;
@@ -2050,7 +2118,7 @@
       lastReadFailed = false;
       await loadIndex();
       const runs = state.runIndex.length
-        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        ? await loadScopedRuns()
         : [];
       const roster = (state.coordTab === "courtesy" || state.coordTab === "map") ? await loadRoster() : [];
       if (state.view !== "coord-home") return;
@@ -2070,7 +2138,7 @@
       lastReadFailed = false;
       await loadIndex();
       const runs = state.runIndex.length
-        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        ? await loadScopedRuns()
         : [];
       if (state.coordTab !== "map") destroyFleetMap();
       contentHolder.innerHTML = "";
@@ -2932,7 +3000,7 @@
       if (state.view !== "courtesy-home") return;
       await loadIndex();
       const runs = state.runIndex.length
-        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        ? await loadScopedRuns()
         : [];
       const roster = await loadRoster();
       if (state.view !== "courtesy-home") return;
@@ -3027,7 +3095,7 @@
       if (state.view !== "helpdesk-home") return;
       await loadIndex();
       const runs = state.runIndex.length
-        ? (await Promise.all(state.runIndex.map(r => loadRun(r.runId)))).filter(Boolean)
+        ? await loadScopedRuns()
         : [];
       const roster = await loadRoster();
       if (state.view !== "helpdesk-home") return;
