@@ -2398,6 +2398,56 @@
     // arrival/departure views for drilling into individual runs.
     if (statsOnly) return wrap;
 
+    // ---- Export a compact snapshot for the management artifact ----
+    // Read-only: builds a payload from what's already loaded, so it adds no
+    // extra Firebase reads at all.
+    const mgmtBtn = document.createElement("button");
+    mgmtBtn.className = "btn btn-secondary";
+    mgmtBtn.style.cssText = "margin-top:14px;";
+    mgmtBtn.textContent = "\u{1F4CB} Copy for management board";
+    mgmtBtn.onclick = async () => {
+      const payload = {
+        v: 1,
+        t: Date.now(),
+        runs: (runs || []).map(r => ({
+          id: r.runId,
+          d: r.description || "",
+          o: r.origin || "",
+          x: r.destination || "",
+          pa: r.plannedArrival || "",
+          pax: (r.manifest || []).length,
+          b: (r.buses || []).map(b => ({
+            n: b.num,
+            g: b.guideName || "",
+            s: b.status || "Not Started",
+            eta: b.eta ? new Date(b.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+            pax: busBoardedCount(r, b.num),
+          })),
+        })),
+      };
+      const text = "BUSCHIEF1:" + JSON.stringify(payload);
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("Copied \u2014 paste into the management board");
+      } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed; top:10px; left:10px; width:90%; height:120px; z-index:9999;";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); showToast("Copied \u2014 paste into the management board"); }
+        catch (e2) { showToast("Press copy on your keyboard, then close"); }
+        setTimeout(() => ta.remove(), 2500);
+      }
+    };
+    wrap.appendChild(mgmtBtn);
+
+    const mgmtNote = document.createElement("p");
+    mgmtNote.className = "subtitle";
+    mgmtNote.style.cssText = "font-size:12px; margin-top:6px;";
+    mgmtNote.textContent = "Copies every loaded run, bus, ETA and status. Paste it into the management board to refresh what management sees.";
+    wrap.appendChild(mgmtNote);
+
     const listHeading = document.createElement("h3");
     listHeading.textContent = "All runs";
     listHeading.style.margin = "22px 0 8px";
