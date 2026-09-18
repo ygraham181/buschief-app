@@ -432,7 +432,37 @@
   // re-runs us if another guide's write landed first — so there is no gap at
   // all where two simultaneous writers can silently clobber each other. This
   // is enforced by the database itself, not guessed at by the app.
-  async function mutateRun(runId, mutateFn) {
+  // ---------- Boarding write reliability ----------
+  // Several guides work the SAME run document at once (8 coaches on a boat
+  // run share one manifest). Firing overlapping writes at one node maximises
+  // contention, so writes for a given run are serialised through a queue.
+  const runWriteQueues = new Map();
+  function enqueueRunWrite(runId, job) {
+    const prev = runWriteQueues.get(runId) || Promise.resolve();
+    const next = prev.then(job).catch(err => { console.error("queued run write failed", runId, err); });
+    runWriteQueues.set(runId, next);
+    return next;
+  }
+  // A write that comes back carries the server's copy of the run, which by
+  // definition does NOT include ticks made after that write was queued.
+  // Assigning it straight to state wiped those newer ticks off the screen,
+  // so pending targets are tracked and re-applied on top of any server copy.
+  const pendingBoardIds = new Set();
+  const pendingBoardTargets = new Map();   // personId -> intended end state
+  function markBoardPending(personId, on, target) {
+    if (on) { pendingBoardIds.add(personId); if (target) pendingBoardTargets.set(personId, target); }
+    else { pendingBoardIds.delete(personId); pendingBoardTargets.delete(personId); }
+  }
+  function applyPendingBoards(run) {
+    if (!run || !Array.isArray(run.manifest) || !pendingBoardTargets.size) return run;
+    pendingBoardTargets.forEach((target, personId) => {
+      const person = run.manifest.find(x => x.id === personId);
+      if (person) Object.assign(person, target);
+    });
+    return run;
+  }
+
+  async function mutateRun(runId, mutateFn, attempt = 0) {
     const key = safeKey("run-" + runId);
     return new Promise((resolve) => {
       fbDb.ref(key).transaction(
@@ -451,7 +481,22 @@
             resolve(null);
             return;
           }
-          if (!committed) { resolve(null); return; }
+          if (!committed) {
+            // Firebase aborts a transaction after repeated contention on the
+            // same node — which is exactly what happens when several guides
+            // tick names on one run at once. This used to resolve null
+            // silently and the guide's tick simply vanished. Retry with a
+            // jittered pause so concurrent retries desynchronise.
+            if (attempt < 4) {
+              setTimeout(() => {
+                mutateRun(runId, mutateFn, attempt + 1).then(resolve);
+              }, 200 + Math.random() * 500 * (attempt + 1));
+              return;
+            }
+            console.error("mutateRun aborted after retries", runId);
+            resolve(null);
+            return;
+          }
           const finalRaw = snapshot ? snapshot.val() : null;
           let finalRun = null;
           try { finalRun = finalRaw ? JSON.parse(finalRaw) : null; } catch (e) { finalRun = null; }
@@ -2059,17 +2104,50 @@
             };
           }
           if (!otherRow) {
-            row.onclick = async () => {
+            row.onclick = () => {
               const personId = p.id;
-              const updated = await mutateRun(run.runId, (fresh) => {
-                const person = fresh.manifest.find(x => x.id === personId);
-                if (!person) return;
-                if (person.boarded && person.busNum === busNum) { person.boarded = false; person.busNum = null; person.boardedAt = null; }
-                else if (!person.boarded) { person.boarded = true; person.busNum = busNum; person.boardedAt = Date.now(); }
-              });
-              if (updated) state.currentRun = updated;
+              const local = state.currentRun.manifest.find(x => x.id === personId);
+              if (!local) return;
+
+              // Work out the intended end state ONCE, from what's on screen.
+              // Sending an explicit target (rather than "toggle") means a
+              // retry or a re-ordered write can never flip it back.
+              let target;
+              if (local.boarded && local.busNum === busNum) target = { boarded: false, busNum: null, boardedAt: null };
+              else if (!local.boarded) target = { boarded: true, busNum: busNum, boardedAt: Date.now() };
+              else return;  // boarded on someone else's bus — not ours to change
+
+              // Optimistic: show the tick immediately. Previously this waited
+              // for the full server round trip, so on a busy network nothing
+              // appeared to happen and guides tapped again, undoing it.
+              const prev = { boarded: local.boarded, busNum: local.busNum, boardedAt: local.boardedAt };
+              Object.assign(local, target);
+              markBoardPending(personId, true, target);
               renderManifestList();
               refreshStatsDisplay();
+
+              // Writes for a run are queued so rapid taps don't race each
+              // other into the same document.
+              enqueueRunWrite(run.runId, async () => {
+                const updated = await mutateRun(run.runId, (fresh) => {
+                  const person = fresh.manifest.find(x => x.id === personId);
+                  if (!person) return;
+                  Object.assign(person, target);
+                });
+                markBoardPending(personId, false);
+                if (updated) {
+                  // Re-apply anything still in flight so later ticks survive.
+                  state.currentRun = applyPendingBoards(updated);
+                } else {
+                  // The write genuinely didn't land — put it back and say so,
+                  // rather than leaving a tick the server never received.
+                  const revert = state.currentRun.manifest.find(x => x.id === personId);
+                  if (revert) Object.assign(revert, prev);
+                  showToast("\u26a0\ufe0f " + esc(p.name) + " didn't save \u2014 tap again");
+                }
+                renderManifestList();
+                refreshStatsDisplay();
+              });
             };
           }
           holder.appendChild(row);
