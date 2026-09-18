@@ -2878,14 +2878,28 @@
           buses.length > 1;
         let perBusEtaHtml = "";
         if (showPerBusEta) {
-          const cells = buses.slice().sort((a, b) => (a.num || 0) - (b.num || 0)).map(bb => {
+          // Ordered by when each coach actually gets here, not by bus number —
+          // they don't leave in sequence, so the one arriving first should
+          // read first. Already-arrived coaches lead, then live ETAs
+          // soonest-first, then anything with no ETA yet at the end.
+          const etaRank = (b) => {
+            if (b.status === "Completed") return { tier: 0, t: b.completedAt || b.eta || 0 };
+            if (b.eta) return { tier: 1, t: b.eta };
+            return { tier: 2, t: Number.MAX_SAFE_INTEGER };
+          };
+          const cells = buses.slice().sort((a, b) => {
+            const ra = etaRank(a), rb = etaRank(b);
+            if (ra.tier !== rb.tier) return ra.tier - rb.tier;
+            if (ra.t !== rb.t) return ra.t - rb.t;
+            return (a.num || 0) - (b.num || 0);
+          }).map((bb, idx) => {
             const t = bb.eta ? new Date(bb.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
             const live = !!t;
             const done = bb.status === "Completed";
             const col = done ? "var(--green)" : live ? "var(--brand)" : "var(--text-dim)";
             const bg = done ? "var(--green-dim)" : live ? "var(--brand-dim)" : "var(--panel-alt)";
             return `<div style="flex:1 1 74px; min-width:74px; padding:6px 4px; border-radius:8px; background:${bg}; text-align:center;">
-                <div style="font-size:10px; font-family:var(--mono); letter-spacing:.04em; color:var(--text-dim);">BUS ${bb.num}</div>
+                <div style="font-size:10px; font-family:var(--mono); letter-spacing:.04em; color:var(--text-dim);">${(bb.eta || bb.status === "Completed") ? `<b style="color:${col};">${idx + 1}${["th","st","nd","rd"][((idx+1)%100-20)%10] || ["th","st","nd","rd"][(idx+1)%100] || "th"}</b> \u00b7 ` : ""}BUS ${bb.num}</div>
                 <div style="font-size:14px; font-weight:800; color:${col}; line-height:1.2;">${done ? "Arrived" : (t || "\u2014")}</div>
               </div>`;
           }).join("");
