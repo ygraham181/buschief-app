@@ -2406,21 +2406,44 @@
     mgmtBtn.style.cssText = "margin-top:14px;";
     mgmtBtn.textContent = "\u{1F4CB} Copy for management board";
     mgmtBtn.onclick = async () => {
+      // The dashboard only holds today + tomorrow, so exporting `runs` would
+      // silently omit Sunday. This is a deliberate one-off read of every run
+      // so the board always gets the whole event.
+      mgmtBtn.disabled = true; mgmtBtn.textContent = "Gathering every run\u2026";
+      let allRuns = runs || [];
+      try {
+        await loadIndex();
+        const idx = asIndexArray(state.runIndex).filter(r => r && r.runId);
+        const settled = await Promise.all(idx.map(async e => {
+          try { return await loadRun(e.runId); } catch (err) { return null; }
+        }));
+        const got = settled.filter(Boolean);
+        if (got.length) allRuns = got;
+      } catch (err) { console.error("export: full load failed, using loaded runs", err); }
       const payload = {
-        v: 1,
+        v: 2,
         t: Date.now(),
-        runs: (runs || []).map(r => ({
+        cap: 54,
+        runs: (allRuns || []).map(r => ({
           id: r.runId,
           d: r.description || "",
           o: r.origin || "",
           x: r.destination || "",
           pa: r.plannedArrival || "",
           pax: (r.manifest || []).length,
+          co: r.busCompany || "",
+          dep: r.departureTime || "",
+          stg: r.stagingLocation || "",
+          dt: r.date || "",
+          ft: r.flightTime || "",
           b: (r.buses || []).map(b => ({
             n: b.num,
             g: b.guideName || "",
             s: b.status || "Not Started",
             eta: b.eta ? new Date(b.eta).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+            // when that ETA was last set, so the board can age it
+            etaAt: b.etaUpdatedAt || null,
+            dpt: b.departedAt || null,
             pax: busBoardedCount(r, b.num),
           })),
         })),
@@ -2428,7 +2451,8 @@
       const text = "BUSCHIEF1:" + JSON.stringify(payload);
       try {
         await navigator.clipboard.writeText(text);
-        showToast("Copied \u2014 paste into the management board");
+        showToast(`Copied ${payload.runs.length} run(s) \u2014 paste into the board`);
+        mgmtBtn.disabled = false; mgmtBtn.textContent = "\u{1F4CB} Copy for management board";
       } catch (e) {
         const ta = document.createElement("textarea");
         ta.value = text;
@@ -2438,6 +2462,7 @@
         try { document.execCommand("copy"); showToast("Copied \u2014 paste into the management board"); }
         catch (e2) { showToast("Press copy on your keyboard, then close"); }
         setTimeout(() => ta.remove(), 2500);
+        mgmtBtn.disabled = false; mgmtBtn.textContent = "\u{1F4CB} Copy for management board";
       }
     };
     wrap.appendChild(mgmtBtn);
@@ -4339,6 +4364,139 @@
       <li>Kept as-is: your guide roster and their PINs, the Courtesy Flow PIN, the Help Desk PIN, your coordinator password, and your Google Sheet connection URL.</li>
       <li>Not touched: your Google Sheet itself still has old test rows in "Live Status" \u2014 clear those separately (delete the tab and let it regenerate, or delete the rows by hand).</li>`;
     wrap.appendChild(dangerList);
+    // ---- Archive & remove a whole day's runs ----
+    // Deliberately backup-first: the export downloads before anything is
+    // deleted, because this is irreversible and takes the manifests,
+    // boarding history and ETAs with it.
+    const cleanHead = document.createElement("h3");
+    cleanHead.textContent = "Archive and remove a day's runs";
+    cleanHead.style.marginTop = "26px";
+    wrap.appendChild(cleanHead);
+
+    const cleanNote = document.createElement("p");
+    cleanNote.className = "subtitle";
+    cleanNote.style.cssText = "font-size:12.5px; margin-top:-6px;";
+    cleanNote.textContent = "Frees database storage for days that are finished. Note this does NOT make the app faster \u2014 it already only loads today and tomorrow. Download the backup first; deletion cannot be undone.";
+    wrap.appendChild(cleanNote);
+
+    const cleanBox = document.createElement("div");
+    cleanBox.className = "card";
+    wrap.appendChild(cleanBox);
+
+    async function renderCleanup() {
+      cleanBox.innerHTML = `<div class="empty-state" style="padding:14px 0;">Loading\u2026</div>`;
+      // Settings skips the background refresh, so state.runIndex can be stale
+      // or empty here — read it fresh before listing days.
+      try { await loadIndex(); } catch (e) { console.error("index load failed", e); }
+      cleanBox.innerHTML = "";
+      const idx = asIndexArray(state.runIndex).filter(r => r && r.runId);
+      if (!idx.length) {
+        cleanBox.innerHTML = `<div class="empty-state" style="padding:16px 0;">No runs in the app.</div>`;
+        return;
+      }
+      // group by the date encoded in the Run ID
+      const byDay = {};
+      idx.forEach(r => {
+        const d = runIdDateMMDD(r.runId);
+        const key = d ? String(d.month).padStart(2, "0") + "-" + String(d.day).padStart(2, "0") : "unknown";
+        if (!byDay[key]) byDay[key] = [];
+        byDay[key].push(r);
+      });
+      const today = new Date();
+      const todayKey = String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
+
+      Object.keys(byDay).sort().forEach(key => {
+        const entries = byDay[key];
+        const isToday = key === todayKey;
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border);";
+        const label = key === "unknown" ? "Undated runs" :
+          new Date(today.getFullYear(), parseInt(key.slice(0, 2), 10) - 1, parseInt(key.slice(3), 10))
+            .toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+        row.innerHTML = `<div style="flex:1;">
+            <div style="font-weight:700; font-size:13.5px;">${esc(label)}${isToday ? ` <span style="font-size:11px; color:var(--brand);">\u00b7 today</span>` : ""}</div>
+            <div style="font-size:12px; color:var(--text-dim);">${entries.length} run${entries.length === 1 ? "" : "s"}</div>
+          </div>`;
+
+        const btn = document.createElement("button");
+        btn.className = "btn btn-danger";
+        btn.style.cssText = "width:auto; padding:7px 11px; font-size:12px; margin:0;";
+        btn.textContent = isToday ? "Today \u2014 blocked" : "Archive & delete";
+        btn.disabled = isToday;   // never let today's runs go by accident
+        if (isToday) btn.style.opacity = "0.45";
+        btn.onclick = () => archiveAndDelete(key, label, entries, btn);
+        row.appendChild(btn);
+        cleanBox.appendChild(row);
+      });
+    }
+
+    async function archiveAndDelete(key, label, entries, btn) {
+      const ok1 = confirm(
+        `Archive and delete ${entries.length} run(s) from ${label}?\n\n` +
+        `A backup file will download FIRST. After that the runs, their manifests, ` +
+        `boarding records and ETAs are permanently removed from the app.\n\nContinue?`);
+      if (!ok1) return;
+
+      btn.disabled = true; btn.textContent = "Backing up\u2026";
+
+      // 1) pull every run and build the backup
+      const backup = { exportedAt: new Date().toISOString(), day: label, runs: [] };
+      let failed = 0;
+      for (const e of entries) {
+        try {
+          const full = await loadRun(e.runId);
+          if (full) backup.runs.push(full); else failed++;
+        } catch (err) { console.error("backup read failed", e.runId, err); failed++; }
+      }
+
+      if (failed) {
+        const ok2 = confirm(
+          `${failed} of ${entries.length} run(s) couldn't be read for the backup.\n\n` +
+          `Deleting now would lose those permanently with no copy. Recommended: cancel and try again.\n\nDelete anyway?`);
+        if (!ok2) { btn.disabled = false; btn.textContent = "Archive & delete"; renderCleanup(); return; }
+      }
+
+      // 2) download the backup before anything is removed
+      try {
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "BusChief_backup_" + key.replace("-", "") + ".json";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } catch (err) {
+        console.error("backup download failed", err);
+        alert("Couldn't download the backup, so nothing was deleted. Try again.");
+        btn.disabled = false; btn.textContent = "Archive & delete"; renderCleanup();
+        return;
+      }
+
+      const ok3 = confirm(
+        `Backup downloaded (${backup.runs.length} run(s)).\n\n` +
+        `Check it saved, then confirm to delete ${label} from the app. This cannot be undone.`);
+      if (!ok3) { btn.disabled = false; btn.textContent = "Archive & delete"; renderCleanup(); return; }
+
+      // 3) delete the run documents, then drop them from the index
+      btn.textContent = "Deleting\u2026";
+      let removed = 0;
+      for (const e of entries) {
+        try { await deleteKey("run-" + e.runId); removed++; }
+        catch (err) { console.error("delete failed", e.runId, err); }
+      }
+      const ids = new Set(entries.map(e => e.runId));
+      await mutateRunIndex(idx2 => {
+        for (let i = idx2.length - 1; i >= 0; i--) {
+          if (ids.has(idx2[i].runId)) idx2.splice(i, 1);
+        }
+      });
+      await loadIndex();
+      showToast(`Removed ${removed} run(s) from ${label}`);
+      renderCleanup();
+    }
+
+    renderCleanup();
+
     const resetBtn = document.createElement("button");
     resetBtn.className = "btn btn-danger";
     resetBtn.textContent = "\u26a0\uFE0F Reset All Runs \u2014 Start Fresh";
