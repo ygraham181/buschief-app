@@ -273,6 +273,7 @@
     paxAddNames: "",              // typed names survive re-renders
     paxAddNeeds: "",
     manifestCatFilter: "all",
+    busNoDraft: "",
     guideAddNames: "",
     coordRunQuery: "",
     loadAllDays: false,
@@ -413,6 +414,7 @@
       // Never leave a run with zero coaches — the UI assumes at least one.
       run.buses = [{ num: 1, status: "Not Started", guideName: "", stagingAt: null, departedAt: null,
         completedAt: null, eta: null, etaUpdatedAt: null, loc: null, cateringLoaded: false,
+        busNo: "", busCo: "", busNoAt: null, busNoBy: null,
         cateringLoadedAt: null, guideArrived: false, guideArrivedAt: null, busArrived: false,
         busArrivedAt: null, teamInPlace: false, teamInPlaceAt: null, checklistBypassed: false }];
     }
@@ -1533,7 +1535,8 @@
     }
     function checklistComplete() {
       const bus = myBus();
-      return checklistItems().every(it => !!bus[it.key]);
+      // Bus number is a hard gate alongside the checklist items.
+      return !!bus.busNo && checklistItems().every(it => !!bus[it.key]);
     }
     function gateStage() {
       const bus = myBus();
@@ -1605,6 +1608,103 @@
         heading.style.marginBottom = "16px";
         heading.textContent = "Check off each item as it's confirmed. The manifest unlocks once everything's checked.";
         bodyHolder.appendChild(heading);
+
+        // ---- Bus / fleet number: first item, and a hard gate ----
+        // The guide standing at the coach is the only person who can read the
+        // fleet number off its side, and everything downstream keys off it —
+        // dispatch calls the bus company by fleet number, not run code, and
+        // the arrival board treats a coach with no number as not yet checked
+        // in. If it can be skipped it will be skipped, so the manifest stays
+        // locked until it is entered.
+        const busNoCard = document.createElement("div");
+        busNoCard.className = "card";
+        busNoCard.style.cssText = "margin-bottom:12px;" +
+          (bus.busNo ? " border-color:var(--green); background:var(--green-dim);" : " border-color:var(--brand);");
+
+        const bnHead = document.createElement("div");
+        bnHead.style.cssText = "font-weight:700; font-size:14.5px; margin-bottom:2px;" +
+          (bus.busNo ? " color:var(--green);" : " color:var(--brand);");
+        bnHead.textContent = bus.busNo ? "\u2713 Bus number recorded" : "Bus number \u2014 required";
+        busNoCard.appendChild(bnHead);
+
+        const bnHint = document.createElement("div");
+        bnHint.className = "subtitle";
+        bnHint.style.cssText = "font-size:12.5px; margin-bottom:9px;";
+        bnHint.textContent = "The fleet number on the side of the coach \u2014 usually 3 or 4 digits.";
+        busNoCard.appendChild(bnHint);
+
+        if (bus.busNo) {
+          const shown = document.createElement("div");
+          shown.style.cssText = "display:flex; align-items:center; justify-content:space-between; gap:10px;";
+          shown.innerHTML = `<div><div style="font-size:20px; font-weight:800; font-family:var(--mono);">${esc(bus.busNo)}</div>` +
+            `<div class="subtitle" style="font-size:12px;">${esc(bus.busCo || state.currentRun.busCompany || "")}</div></div>`;
+          const editBtn = document.createElement("button");
+          editBtn.className = "btn btn-secondary";
+          editBtn.style.cssText = "width:auto; margin:0; padding:8px 12px; font-size:13px;";
+          editBtn.textContent = "Change";
+          editBtn.onclick = async () => {
+            // Editable after the fact: guides do get moved to another coach.
+            await mutateRun(state.currentRun.runId, (fresh) => {
+              const fb = fresh.buses.find(x => x.num === busNum);
+              if (fb) { fb.busNoPrev = fb.busNo; fb.busNo = ""; }
+            }).then(u => { if (u) state.currentRun = u; });
+            render();
+          };
+          shown.appendChild(editBtn);
+          busNoCard.appendChild(shown);
+        } else {
+          const bnRow = document.createElement("div");
+          bnRow.style.cssText = "display:flex; gap:8px;";
+          const bnInput = document.createElement("input");
+          // NOT type="number" — that strips leading zeros, adds spinners and
+          // rejects the occasional alphanumeric fleet code.
+          bnInput.type = "text";
+          bnInput.inputMode = "numeric";
+          bnInput.autocomplete = "off"; bnInput.autocapitalize = "off";
+          bnInput.spellcheck = false;
+          bnInput.placeholder = "e.g. 1348";
+          bnInput.value = state.busNoDraft || "";
+          bnInput.style.cssText = "flex:1; font-size:17px; padding:12px; font-family:var(--mono);";
+          bnInput.oninput = e => { state.busNoDraft = e.target.value; };
+          const bnSave = document.createElement("button");
+          bnSave.className = "btn btn-primary";
+          bnSave.style.cssText = "width:auto; margin:0; padding:12px 16px;";
+          bnSave.textContent = "Save";
+          bnSave.onclick = async () => {
+            // Trim, and forgive a leading # or "Bus " typed out of habit.
+            let v = String(state.busNoDraft || "").trim().replace(/^#/, "").replace(/^bus\s*/i, "").trim();
+            if (v.length < 2 || v.length > 6) {
+              showToast("Bus numbers are 2\u20136 characters \u2014 check and try again");
+              return;
+            }
+            const co = bus.busCo || state.currentRun.busCompany || "";
+            // Warn on a duplicate, but never block: it is usually a typo,
+            // occasionally a genuine double-assignment.
+            const dupe = (state.currentRun.buses || []).find(x => x.num !== busNum &&
+              String(x.busNo || "").toLowerCase() === v.toLowerCase());
+            if (dupe && !confirm(`Bus ${v} is already recorded on Bus ${dupe.num} of this run.\n\nIs that right?`)) return;
+            bnSave.disabled = true; bnSave.textContent = "Saving\u2026";
+            const updated = await mutateRun(state.currentRun.runId, (fresh) => {
+              const fb = fresh.buses.find(x => x.num === busNum);
+              if (!fb) return;
+              fb.busNo = v;
+              fb.busCo = co;
+              fb.busNoAt = Date.now();          // audit trail: when
+              fb.busNoBy = state.guideName || ""; // and who
+            });
+            if (updated) {
+              state.currentRun = updated;
+              state.busNoDraft = "";
+              showToast(`${co ? co + " \u00b7 " : ""}${v} recorded`);
+              render();
+            } else {
+              bnSave.disabled = false; bnSave.textContent = "Save";
+            }
+          };
+          bnRow.appendChild(bnInput); bnRow.appendChild(bnSave);
+          busNoCard.appendChild(bnRow);
+        }
+        bodyHolder.appendChild(busNoCard);
 
         const card = document.createElement("div");
         card.className = "card";
